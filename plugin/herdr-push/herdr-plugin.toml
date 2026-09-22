@@ -1,0 +1,13 @@
+id = "shepherd.push"
+name = "Shepherd push"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Push a notification to your phone when an agent stops"
+platforms = ["macos", "linux"]
+
+# Herdr already knows the moment an agent's state changes, so there is nothing
+# to poll and no daemon to supervise. The hook runs, decides whether this is
+# worth saying, and sends.
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "notify.py"]
