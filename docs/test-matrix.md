@@ -11,10 +11,17 @@ Throwaway agents make this repeatable without touching real work:
 herdr workspace create --cwd ~/shepherd-test/alpha --label test-claude --no-focus
 herdr workspace create --cwd ~/shepherd-test/beta  --label test-pi     --no-focus
 herdr workspace create --cwd ~/shepherd-test/gamma --label test-codex  --no-focus
+herdr workspace create --cwd ~/shepherd-test/delta --label test-opencode --no-focus
+herdr workspace create --cwd ~/shepherd-test/omega --label test-omp      --no-focus
 herdr pane run <pane> claude      # one of each, they parse differently
-herdr pane run <pane> pi
+herdr pane run <pane> pi -e <pi>/examples/extensions/question.ts
 herdr pane run <pane> codex
+herdr pane run <pane> opencode
+herdr pane run <pane> omp
 ```
+
+Pi has no question tool of its own; the example extension gives it one. It
+does not tell Herdr it is waiting, so Shepherd recognises the menu on screen.
 
 Screen coordinates for `adb shell input tap` are device pixels (1080×2410 on a
 Pixel 10 Pro); screenshots are usually displayed scaled, so multiply the

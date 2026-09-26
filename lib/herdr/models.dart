@@ -195,6 +195,20 @@ class Pane {
         stateSeq: stateSeq,
       );
 
+  Pane withStatus(String value) => Pane(
+        paneId: paneId,
+        tabId: tabId,
+        workspaceId: workspaceId,
+        agent: agent,
+        agentStatus: value,
+        cwd: cwd,
+        title: title,
+        label: label,
+        agentSession: agentSession,
+        focused: focused,
+        stateSeq: stateSeq,
+      );
+
   bool get isWorking => agentStatus == 'working';
   bool get isBlocked => agentStatus == 'blocked';
 
@@ -237,7 +251,7 @@ class Pane {
     final seen = <String>{};
     final kept = <String>[];
     // Only spaced separators divide segments; hyphens inside a word do not.
-    for (final part in raw.split(RegExp(r'\s+[-·|—]\s+'))) {
+    for (final part in raw.split(RegExp(r'\s+[-·|—>!]\s+'))) {
       // Codex puts its own state at the front of the title while it waits —
       // "[ . ] Action Required | Describe tool/publish.sh". The row already
       // says the agent is waiting, in red; the title should stay the name.
@@ -248,11 +262,23 @@ class Pane {
       // A leading glyph normalises to nothing; so does pure punctuation.
       if (key.isEmpty) continue;
       if (key == folder || key == agentName) continue;
+      if (_agentShortNames[agent]?.contains(key) ?? false) continue;
       if (!seen.add(key)) continue;
       kept.add(piece);
     }
     return kept.join(' · ');
   }
+
+  /// Session titles an agent keeps outside the terminal, by session id.
+  /// OpenCode stores the full title in its database and writes only a
+  /// truncated copy into the terminal title.
+  static final Map<String, String> sessionTitles = {};
+
+  /// What an agent calls itself at the front of its title: OpenCode writes
+  /// "OC | `title`".
+  static const _agentShortNames = {
+    'opencode': {'oc'},
+  };
 
   bool get hasMeaningfulTitle => _cleanTitle.isNotEmpty;
 
@@ -261,6 +287,8 @@ class Pane {
   String get sessionName {
     final named = label?.trim();
     if (named != null && named.isNotEmpty) return named;
+    final kept = sessionTitles[agentSession?.value];
+    if (kept != null && kept.isNotEmpty) return kept;
     final cleaned = _cleanTitle;
     return cleaned.isEmpty ? shortCwd : cleaned;
   }

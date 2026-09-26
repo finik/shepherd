@@ -24,7 +24,9 @@ abstract class TranscriptAdapter {
 
   static TranscriptAdapter forAgent(String? agent) {
     switch (agent) {
-      case 'pi':
+      // oh-my-pi writes Pi's format; OpenCode is read through a mirror
+      // written in it.
+      case 'pi' || 'omp' || 'opencode':
         return PiAdapter();
       case 'codex':
         return CodexAdapter();
