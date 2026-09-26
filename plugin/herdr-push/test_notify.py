@@ -102,6 +102,15 @@ with tempfile.TemporaryDirectory() as tmp:
           notify.last_typed(transcript) == datetime.datetime(
               2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
 
+print("\nwhat Claude writes on its own does not count")
+check("a background task reporting back is not you", not notify.typed_by_you({
+    "type": "user", "promptSource": "system",
+    "origin": {"kind": "task-notification"},
+    "message": {"role": "user", "content": "<task-notification>…"}}))
+check("a typed prompt is", notify.typed_by_you({
+    "type": "user", "promptSource": "typed", "origin": {"kind": "human"},
+    "message": {"role": "user", "content": "check the history"}}))
+
 print("\nwhat you typed into codex counts too")
 check("a codex prompt is you", notify.typed_by_you({
     "type": "response_item", "payload": {

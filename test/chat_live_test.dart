@@ -78,6 +78,37 @@ void main() {
         findsOneWidget);
   });
 
+  testWidgets('a turn stopped after answering says stopped', (tester) async {
+    final state = working();
+    state.turns = [
+      Turn(id: 'c0', userText: 'run the chain')
+        ..steps.addAll(const [
+          Reply('Starting from the 2020 carryovers.'),
+          Failure('This operation was aborted'),
+        ]),
+      Turn(id: 'c1', userText: 'again')..steps.add(const Failure('invalid_grant')),
+    ];
+    await show(tester, state);
+    expect(find.text('STOPPED'), findsOneWidget);
+    expect(find.text('NO REPLY'), findsOneWidget);
+  });
+
+  testWidgets('a wide table scrolls rather than breaking numbers',
+      (tester) async {
+    final state = working();
+    state.turns = [
+      Turn(id: 'c0', userText: 'compare')
+        ..steps.add(const Reply(
+            '| year | ours | filed | diff | ours refund | filed refund |\n'
+            '|---|---|---|---|---|---|\n'
+            '| 2025 | 164,395 | 165,221 | +826 | 15,700 | 14,874 |')),
+    ];
+    await show(tester, state);
+    final scrollers = tester.widgetList<SingleChildScrollView>(
+        find.byType(SingleChildScrollView));
+    expect(scrollers.any((s) => s.scrollDirection == Axis.horizontal), isTrue);
+  });
+
   testWidgets('reconnecting is a wait, not an error', (tester) async {
     final state = working()..conn = ConnState.connecting;
     await tester.pumpWidget(MaterialApp(home: ChatScreen(state: state)));

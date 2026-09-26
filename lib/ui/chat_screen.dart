@@ -465,7 +465,8 @@ class _ChatScreenState extends State<ChatScreen> {
         case Failure():
           flushProse();
           flushLedger();
-          out.add(_failure(d, step.message, pad));
+          out.add(_failure(d, step.message, pad,
+              answered: turn.assistantTexts.any((t) => t.trim().isNotEmpty)));
       }
     }
     flushProse();
@@ -634,10 +635,12 @@ class _ChatScreenState extends State<ChatScreen> {
     ),
   );
 
-  /// The agent answered with nothing and a reason. Said plainly and in the
-  /// accent, because a turn that silently produced no reply is the one thing
-  /// a chat must never render as an empty gap.
-  Widget _failure(D d, String text, double pad) => Container(
+  /// Why the agent stopped, said plainly and in the accent: a turn that
+  /// silently ends is the one thing a chat must never render as a gap. The
+  /// heading says what happened to the turn — nothing came back, it was
+  /// stopped part way, or it broke after answering.
+  Widget _failure(D d, String text, double pad, {required bool answered}) =>
+      Container(
     margin: EdgeInsets.fromLTRB(pad, 6, pad, 0),
     padding: const EdgeInsets.all(12),
     decoration: BoxDecoration(
@@ -646,7 +649,13 @@ class _ChatScreenState extends State<ChatScreen> {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('NO REPLY', style: d.label.copyWith(color: d.accentText)),
+        Text(
+            !answered
+                ? 'NO REPLY'
+                : RegExp(r'abort|interrupt', caseSensitive: false).hasMatch(text)
+                    ? 'STOPPED'
+                    : 'ERROR',
+            style: d.label.copyWith(color: d.accentText)),
         const SizedBox(height: 6),
         Text(text, style: d.prose.copyWith(fontSize: 13, color: d.ink2)),
       ],
@@ -696,6 +705,10 @@ class _ChatScreenState extends State<ChatScreen> {
     listIndent: 18,
     code: d.inlineCode,
     codeblockPadding: const EdgeInsets.all(12),
+    // Columns at their natural width, scrolled sideways when they do not
+    // fit: squeezed to the screen, a number breaks across lines.
+    tableColumnWidth: const IntrinsicColumnWidth(),
+    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     codeblockDecoration: BoxDecoration(color: d.fill),
     blockquote: d.prose.copyWith(color: d.ink2),
     blockquoteDecoration: BoxDecoration(

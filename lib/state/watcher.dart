@@ -231,6 +231,13 @@ def stamp_of(value):
 
 
 def typed_by_you(record):
+    # Claude marks what was not typed by a person: its own notes, and
+    # background tasks reporting back.
+    if record.get('isMeta') or record.get('promptSource') == 'system':
+        return False
+    origin = record.get('origin')
+    if isinstance(origin, dict) and origin.get('kind') not in (None, 'human'):
+        return False
     message = record.get('message')
     if isinstance(message, dict) and message.get('role') == 'user':
         content = message.get('content')
