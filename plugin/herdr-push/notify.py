@@ -164,6 +164,13 @@ def last_typed(path: str):
 
 def typed_by_you(record) -> bool:
     """Is this record something a person typed, in any agent's format?"""
+    # Claude marks what was not typed by a person: its own notes, and
+    # background tasks reporting back.
+    if record.get("isMeta") or record.get("promptSource") == "system":
+        return False
+    origin = record.get("origin")
+    if isinstance(origin, dict) and origin.get("kind") not in (None, "human"):
+        return False
     message = record.get("message")
     if isinstance(message, dict) and message.get("role") == "user":
         # Tool results are recorded as user messages; they are the agent
