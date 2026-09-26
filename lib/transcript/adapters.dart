@@ -327,6 +327,22 @@ bool _attachResult(Turn turn, _Block block) {
 final RegExp _attachmentNote =
     RegExp(r'^\[(image|file|pasted[^\]]*)[:\]]', caseSensitive: false);
 
+/// A background task reporting back, as the step it belongs in: a failure
+/// when it failed — a subagent that hit a limit is news — and otherwise a
+/// quiet call with its summary.
+TurnStep? _taskNotice(String text) {
+  String? tag(String name) =>
+      RegExp('<$name>([\\s\\S]*?)</$name>').firstMatch(text)?.group(1)?.trim();
+  final summary = tag('summary');
+  if (summary == null || summary.isEmpty) return null;
+  if (tag('status') == 'failed') return Failure(summary);
+  return ToolCall(
+    id: tag('task-id') ?? '',
+    name: 'task',
+    detail: firstLineOf(summary, max: 70),
+  )..result = clampBlock(summary);
+}
+
 class ClaudeAdapter implements TranscriptAdapter {
   @override
   final List<Turn> turns = [];
@@ -395,6 +411,19 @@ class ClaudeAdapter implements TranscriptAdapter {
       if (text.startsWith('<command-name>') ||
           text.startsWith('<local-command')) {
         return changed;
+      }
+      // Claude writes more than what you typed as user messages, and says
+      // which: its own notes are `isMeta`, and a background task reporting
+      // back arrives with `promptSource: "system"`. Neither is you.
+      if (r['isMeta'] == true || text.startsWith('[Request interrupted')) {
+        return changed;
+      }
+      if (r['promptSource'] == 'system' ||
+          text.startsWith('<task-notification>')) {
+        final notice = _taskNotice(text);
+        if (notice == null || turns.isEmpty) return changed;
+        turns.last.steps.add(notice);
+        return true;
       }
       // Claude records an attached file as its own user message. It belongs
       // to the message that carried it rather than starting a turn, and the
