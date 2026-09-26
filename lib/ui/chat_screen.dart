@@ -899,8 +899,14 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
     if (choice == null || !mounted) return;
-    final picked =
-        choice == 'photo' ? await _pickPhoto(d) : await _pickFile();
+    final messenger = ScaffoldMessenger.of(context);
+    ({File file, String name})? picked;
+    try {
+      picked = choice == 'photo' ? await _pickPhoto(d) : await _pickFile();
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Could not open it: $e')));
+      return;
+    }
     if (picked == null || !mounted) return;
     await _stage(state, picked.file, picked.name);
   }
@@ -937,7 +943,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final chosen = picked.first;
     // Android hands back a `content://` URI, for which the package reports no
     // `path`, so the bytes are copied out to a local file first.
-    final directory = await getTemporaryDirectory();
+    // A folder of its own per pick: the same name picked twice must not land
+    // on the copy left from the first time.
+    final directory = await Directory(
+            '${(await getTemporaryDirectory()).path}/picked-'
+            '${DateTime.now().microsecondsSinceEpoch}')
+        .create(recursive: true);
     final local = File('${directory.path}/${Uploads.safeName(chosen.name)}');
     await chosen.xFile.saveTo(local.path);
     return (file: local, name: chosen.name);

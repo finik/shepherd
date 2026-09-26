@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dartssh2/dartssh2.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -175,13 +176,18 @@ class AgentWatcher extends TaskHandler {
     if (_quietMinutes <= 0) return false;
     final ssh = _ssh;
     if (ssh == null) return false;
-    final paths = [
+    final panes = [
       for (final pane in snapshot.agentPanes)
-        if (pane.agentSession?.isPath ?? false) pane.agentSession!.value
+        {
+          'agent': pane.agent,
+          'kind': pane.agentSession?.kind,
+          'value': pane.agentSession?.value,
+          'cwd': pane.cwd,
+        }
     ];
     try {
       final out = utf8.decode(await ssh
-          .run(_lastInteractionScript(paths))
+          .run(lastInteractionScript(panes))
           .timeout(const Duration(seconds: 15)));
       final seconds = double.tryParse(out.trim());
       if (seconds == null) return false;
@@ -192,53 +198,146 @@ class AgentWatcher extends TaskHandler {
     }
   }
 
-  static String _lastInteractionScript(List<String> paths) {
-    final quoted = paths
-        .map((p) => "'" + p.replaceAll("'", "'\\''") + "'")
-        .join(' ');
-    return "python3 - " + quoted + " <<'SNIPPET'\n" + _interaction + "\nSNIPPET\n";
+  /// How long ago you last prompted an agent or used the app, in seconds, or
+  /// an empty line when nothing can be measured.
+  @visibleForTesting
+  static String lastInteractionScript(List<Map<String, String?>> panes) {
+    final json = jsonEncode(panes);
+    return "python3 - '${json.replaceAll("'", "'\\''")}' <<'SNIPPET'\n"
+        '$_interaction\nSNIPPET\n';
   }
 
   /// Seconds since the newest user message or phone heartbeat, printed by the
   /// host. Python because reading JSON records in shell is how subtle bugs
   /// get in, and every host that runs Herdr already has it.
   static const _interaction = r'''
-import json, os, sys, time
-newest = None
-for path in sys.argv[1:]:
+import datetime, json, os, subprocess, sys, time
+# One JSON argument: the agent panes, each with agent, kind, value and cwd.
+panes = json.loads(sys.argv[1])
+
+
+def stamp_of(value):
+    # A stamp with no offset is UTC; read as local time it lands in the
+    # future and would read as "you were here just now".
+    if not isinstance(value, str) or not value:
+        return None
     try:
-        with open(path, 'rb') as handle:
-            handle.seek(0, os.SEEK_END)
-            handle.seek(max(0, handle.tell() - 64000))
-            chunk = handle.read().decode('utf-8', 'replace')
-    except OSError:
-        continue
-    for line in chunk.splitlines():
-        if '"user"' not in line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue
-        message = record.get('message')
-        if not isinstance(message, dict) or message.get('role') != 'user':
-            continue
+        parsed = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.timestamp()
+
+
+def typed_by_you(record):
+    message = record.get('message')
+    if isinstance(message, dict) and message.get('role') == 'user':
         content = message.get('content')
-        if isinstance(content, list) and not any(
-                isinstance(b, dict) and b.get('type') == 'text'
-                for b in content):
-            continue
-        stamp = record.get('timestamp')
-        if not isinstance(stamp, str):
-            continue
-        try:
-            import datetime
-            value = datetime.datetime.fromisoformat(
-                stamp.replace('Z', '+00:00')).timestamp()
-        except ValueError:
-            continue
-        if newest is None or value > newest:
-            newest = value
+        if isinstance(content, list):
+            return any(isinstance(b, dict) and b.get('type') == 'text'
+                       for b in content)
+        return isinstance(content, str) and bool(content.strip())
+    payload = record.get('payload')
+    if (record.get('type') == 'response_item' and isinstance(payload, dict)
+            and payload.get('type') == 'message'
+            and payload.get('role') == 'user'):
+        text = ' '.join(b.get('text', '') for b in payload.get('content') or []
+                        if isinstance(b, dict)).strip()
+        return bool(text) and not text.startswith('<')
+    return False
+
+
+def codex_rollout(cwd):
+    want, best = os.path.realpath(cwd), None
+    for base, _, names in os.walk(os.path.expanduser('~/.codex/sessions')):
+        for name in names:
+            if not (name.startswith('rollout-') and name.endswith('.jsonl')):
+                continue
+            path = os.path.join(base, name)
+            try:
+                with open(path) as handle:
+                    meta = json.loads(handle.readline()).get('payload') or {}
+            except (OSError, ValueError):
+                continue
+            if meta.get('cwd') and os.path.realpath(meta['cwd']) == want:
+                mtime = os.path.getmtime(path)
+                if best is None or mtime > best[0]:
+                    best = (mtime, path)
+    return best[1] if best else None
+
+
+def opencode_time(ids):
+    db = os.path.expanduser('~/.local/share/opencode/opencode.db')
+    if not ids or not os.path.exists(db):
+        return None
+    import sqlite3
+    try:
+        conn = sqlite3.connect('file:%s?mode=ro' % db, uri=True, timeout=5)
+        row = conn.execute(
+            'select max(time_created) from message where session_id in (%s) '
+            "and json_extract(data, '$.role') = 'user'"
+            % ','.join('?' * len(ids)), ids).fetchone()
+        conn.close()
+    except sqlite3.Error:
+        return None
+    return row[0] / 1000 if row and row[0] else None
+
+
+paths, opencode = [], []
+for pane in panes:
+    agent, kind, value = pane.get('agent'), pane.get('kind'), pane.get('value')
+    if agent == 'opencode' and (value or '').startswith('ses_'):
+        opencode.append(value)
+    elif kind == 'path' and value:
+        paths.append(value)
+    elif kind == 'id' and value and all(c.isalnum() or c in '._-' for c in value):
+        out = subprocess.run(
+            ['find', os.path.expanduser('~/.claude/projects'),
+             os.path.expanduser('~/.codex/sessions'), '-maxdepth', '3',
+             '-name', '*%s*.jsonl' % value],
+            capture_output=True, text=True).stdout.split()
+        paths.extend(out[:1])
+    elif agent == 'codex' and pane.get('cwd'):
+        found = codex_rollout(pane['cwd'])
+        if found:
+            paths.append(found)
+
+def last_typed(path):
+    # Backwards from the end, a block at a time: one long agent turn puts
+    # megabytes of tool output after the prompt that started it.
+    try:
+        handle = open(path, 'rb')
+    except OSError:
+        return None
+    with handle:
+        end = handle.seek(0, os.SEEK_END)
+        tail = b''
+        while end > 0 and len(tail) < 16 << 20:
+            start = max(0, end - (256 << 10))
+            handle.seek(start)
+            tail = handle.read(end - start) + tail
+            end = start
+            lines = tail.split(b'\n')
+            # The first line may be cut off unless this is the file's start.
+            complete = lines if start == 0 else lines[1:]
+            for line in reversed(complete):
+                if b'"user"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if typed_by_you(record):
+                    return stamp_of(record.get('timestamp'))
+    return None
+
+
+newest = opencode_time(opencode)
+for path in paths:
+    value = last_typed(path)
+    if value is not None and (newest is None or value > newest):
+        newest = value
 active = os.path.expanduser('~/.shepherd/active')
 try:
     for name in os.listdir(active):
@@ -247,7 +346,10 @@ try:
             newest = value
 except OSError:
     pass
-print('' if newest is None else max(0.0, time.time() - newest))
+if newest is None or newest - time.time() > 60:
+    print('')
+else:
+    print(max(0.0, time.time() - newest))
 ''';
 
   Future<void> _notify(String title, String body) async {

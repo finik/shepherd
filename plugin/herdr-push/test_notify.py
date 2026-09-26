@@ -72,6 +72,7 @@ with tempfile.TemporaryDirectory() as tmp:
         }) + "\n")
     original = notify.transcript_paths
     notify.transcript_paths = lambda _herdr: [transcript]
+    notify.OPENCODE_DB = os.path.join(tmp, "absent.db")
     try:
         newest = notify.last_prompt_time("herdr")
     finally:
@@ -81,6 +82,25 @@ with tempfile.TemporaryDirectory() as tmp:
     check("a prompt is found", newest is not None)
     check("a tool result is not mistaken for you",
           newest is not None and abs(newest - expected.timestamp()) < 1)
+
+print("\na prompt buried under a long turn is still found")
+with tempfile.TemporaryDirectory() as tmp:
+    transcript = os.path.join(tmp, "long.jsonl")
+    with open(transcript, "w") as handle:
+        handle.write(json.dumps({
+            "type": "user", "timestamp": "2026-01-01T00:00:00Z",
+            "message": {"role": "user", "content": "run the whole suite"},
+        }) + "\n")
+        for _ in range(400):
+            handle.write(json.dumps({
+                "type": "user", "timestamp": "2026-01-01T00:05:00Z",
+                "message": {"role": "user", "content": [
+                    {"type": "tool_result", "content": "x" * 4000}]},
+            }) + "\n")
+    import datetime
+    check("found past 1.6MB of tool output",
+          notify.last_typed(transcript) == datetime.datetime(
+              2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
 
 print("\nwhat you typed into codex counts too")
 check("a codex prompt is you", notify.typed_by_you({
@@ -96,6 +116,27 @@ check("a codex reply is not", not notify.typed_by_you({
     "type": "response_item", "payload": {
         "type": "message", "role": "assistant",
         "content": [{"type": "output_text", "text": "done"}]}}))
+
+print("\nwhat you typed into opencode counts too")
+with tempfile.TemporaryDirectory() as tmp:
+    import sqlite3
+    path = os.path.join(tmp, "opencode.db")
+    db = sqlite3.connect(path)
+    db.execute("create table message (id text, session_id text, "
+               "time_created integer, data text)")
+    db.executemany("insert into message values (?, ?, ?, ?)", [
+        ("m1", "ses_a", 1_000_000, json.dumps({"role": "user"})),
+        ("m2", "ses_a", 9_000_000, json.dumps({"role": "assistant"})),
+        ("m3", "ses_b", 5_000_000, json.dumps({"role": "user"})),
+    ])
+    db.commit()
+    db.close()
+    notify.OPENCODE_DB = path
+    notify._snapshot_cache["value"] = {"panes": [
+        {"agent": "opencode", "agent_session": {"kind": "id", "value": "ses_a"}}]}
+    check("the newest message you typed in that session",
+          notify.opencode_prompt_time("herdr") == 1000)
+    notify._snapshot_cache.clear()
 
 print("\nstate is recorded atomically")
 with tempfile.TemporaryDirectory() as tmp:

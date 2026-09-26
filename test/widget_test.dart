@@ -420,6 +420,42 @@ void main() {
     });
 
 
+    test('an opencode pane is named by its session, not its initials', () {
+      final pane = Pane(
+        paneId: 'w11:p1',
+        tabId: 'w11:t1',
+        workspaceId: 'w11',
+        agent: 'opencode',
+        cwd: '/Users/x/work/cart',
+        title: 'OC | flag.png description and cart discoun…',
+      );
+      expect(pane.sessionName, 'flag.png description and cart discoun…');
+    });
+
+    test('an omp pane is named by its session, not its prompt glyph', () {
+      final pane = Pane(
+        paneId: 'w16:p1',
+        tabId: 'w16:t1',
+        workspaceId: 'w16',
+        agent: 'omp',
+        cwd: '/Users/x/work/cart',
+        title: 'π > Describe picture and add discount',
+      );
+      expect(pane.sessionName, 'Describe picture and add discount');
+    });
+
+    test('an omp pane waiting on you keeps its name', () {
+      final pane = Pane(
+        paneId: 'w16:p1',
+        tabId: 'w16:t1',
+        workspaceId: 'w16',
+        agent: 'omp',
+        cwd: '/Users/x/work/cart',
+        title: 'π ! Describe picture and add discount',
+      );
+      expect(pane.sessionName, 'Describe picture and add discount');
+    });
+
     test('a name you set outranks whatever the program writes', () {
       final pane = Pane(
         paneId: 'w6:p1',

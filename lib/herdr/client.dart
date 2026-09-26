@@ -190,12 +190,15 @@ class HerdrClient {
     String paneId, {
     String source = 'recent_unwrapped',
     int lines = 60,
+
+    /// Keep the colours: some menus mark their selection with nothing else.
+    bool ansi = false,
   }) async {
     final res = await call('pane.read', {
       'pane_id': paneId,
       'source': source,
       'lines': lines,
-      'strip_ansi': true,
+      'strip_ansi': !ansi,
     });
     return ((res['read'] as Map<String, dynamic>?)?['text'] as String?) ?? '';
   }

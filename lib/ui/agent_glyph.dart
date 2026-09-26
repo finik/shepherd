@@ -23,6 +23,8 @@ class AgentGlyph extends StatelessWidget {
       'pi' => _PiGlyph(),
       'claude' => _ClaudeGlyph(),
       'codex' => _CodexGlyph(),
+      'opencode' => _OpencodeGlyph(d.ink),
+      'omp' => _OmpGlyph(),
       _ => null,
     };
     if (painter == null) {
@@ -152,3 +154,61 @@ class _CodexGlyph extends CustomPainter {
   bool shouldRepaint(_CodexGlyph old) => false;
 }
 
+/// OpenCode's mark, from its favicon on a 512 grid: a frame around a grey
+/// square. The frame is white on OpenCode's own dark tile, so here it takes
+/// the text colour to read on either theme.
+class _OpencodeGlyph extends CustomPainter {
+  final Color frame;
+  _OpencodeGlyph(this.frame);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // The mark spans x 128–384 and y 96–416; fit that, not the whole tile.
+    final scale = size.height / 320;
+    canvas.save();
+    canvas.translate((size.width - 256 * scale) / 2, 0);
+    canvas.scale(scale);
+    canvas.translate(-128, -96);
+    canvas.drawRect(const Rect.fromLTRB(192, 224, 320, 352),
+        Paint()..color = const Color(0xFF5A5858));
+    canvas.drawPath(
+      Path()
+        ..fillType = PathFillType.evenOdd
+        ..addRect(const Rect.fromLTRB(128, 96, 384, 416))
+        ..addRect(const Rect.fromLTRB(192, 160, 320, 352)),
+      Paint()..color = frame,
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_OpencodeGlyph old) => old.frame != frame;
+}
+
+/// oh-my-pi's π mark, from its SVG on a 64 grid, with its diagonal gradient
+/// from magenta through violet to cyan (converted from the SVG's oklch).
+class _OmpGlyph extends CustomPainter {
+  _OmpGlyph();
+
+  static final _path = parseSvgPath('M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z');
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 64);
+    canvas.drawPath(
+      _path,
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFF84FCC), Color(0xFF9362F4), Color(0xFF00DBE4)],
+          stops: [0, 0.5, 1],
+        ).createShader(const Rect.fromLTRB(10, 14, 54, 56)),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_OmpGlyph old) => false;
+}

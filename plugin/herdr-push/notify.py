@@ -23,6 +23,7 @@ import urllib.parse
 import urllib.request
 
 TIMEOUT = 10
+OPENCODE_DB = "~/.local/share/opencode/opencode.db"
 
 
 def main() -> int:
@@ -121,30 +122,44 @@ def since_last_interaction(herdr: str):
 
 def last_prompt_time(herdr: str):
     """When a user message was last written to any agent's transcript."""
-    newest = None
+    newest = opencode_prompt_time(herdr)
     for path in transcript_paths(herdr):
-        try:
-            with open(path, "rb") as handle:
-                handle.seek(0, os.SEEK_END)
-                size = handle.tell()
-                handle.seek(max(0, size - 64000))
-                chunk = handle.read().decode("utf-8", "replace")
-        except OSError:
-            continue
-        for line in chunk.split("\n"):
-            line = line.strip()
-            if not line or '"user"' not in line:
-                continue
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if not typed_by_you(record):
-                continue
-            stamp = parse_time(record.get("timestamp"))
-            if stamp is not None and (newest is None or stamp > newest):
-                newest = stamp
+        stamp = last_typed(path)
+        if stamp is not None and (newest is None or stamp > newest):
+            newest = stamp
     return newest
+
+
+def last_typed(path: str):
+    """The newest prompt you typed into one transcript, as epoch seconds.
+
+    Read backwards a block at a time: one long agent turn puts megabytes of
+    tool output after the prompt that started it.
+    """
+    try:
+        handle = open(path, "rb")
+    except OSError:
+        return None
+    with handle:
+        end = handle.seek(0, os.SEEK_END)
+        tail = b""
+        while end > 0 and len(tail) < 16 << 20:
+            start = max(0, end - (256 << 10))
+            handle.seek(start)
+            tail = handle.read(end - start) + tail
+            end = start
+            lines = tail.split(b"\n")
+            # The first line may be cut off unless this is the file's start.
+            for line in reversed(lines if start == 0 else lines[1:]):
+                if b'"user"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if typed_by_you(record):
+                    return parse_time(record.get("timestamp"))
+    return None
 
 
 def typed_by_you(record) -> bool:
@@ -210,6 +225,32 @@ def transcript_paths(herdr: str):
         elif all(c.isalnum() or c in "._-" for c in value):
             paths.extend(find_by_id(value))
     return paths
+
+
+def opencode_prompt_time(herdr: str):
+    """When a message was last typed into an OpenCode session Herdr knows of.
+
+    OpenCode keeps sessions in SQLite rather than in a transcript file.
+    """
+    ids = [(p.get("agent_session") or {}).get("value") or ""
+           for p in read_snapshot(herdr).get("panes", [])
+           if p.get("agent") == "opencode"]
+    ids = [i for i in ids if i.startswith("ses_")]
+    path = os.path.expanduser(OPENCODE_DB)
+    if not ids or not os.path.exists(path):
+        return None
+    import sqlite3
+    try:
+        db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+        marks = ",".join("?" * len(ids))
+        row = db.execute(
+            f"select max(time_created) from message where session_id in "
+            f"({marks}) and json_extract(data, '$.role') = 'user'",
+            ids).fetchone()
+        db.close()
+    except sqlite3.Error:
+        return None
+    return row[0] / 1000 if row and row[0] else None
 
 
 def codex_rollout(cwd: str):
