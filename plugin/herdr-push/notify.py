@@ -51,6 +51,13 @@ def main() -> int:
     if body is None:
         return 0
 
+    # An agent whose approvals a model reviews reports blocked for a moment
+    # on every tool call and moves on by itself. A question worth a
+    # notification is still waiting a few seconds later.
+    if status == "blocked" and not still_blocked(pane_id):
+        print(f"{pane_id}: blocked only briefly; not news", file=sys.stderr)
+        return 0
+
     # A question waits indefinitely and produces no further event, so
     # suppressing it means nobody is ever told. Only "finished" is worth
     # staying quiet about.
@@ -82,6 +89,21 @@ def main() -> int:
     else:
         print("nothing configured; nothing sent", file=sys.stderr)
     return 0
+
+
+BLOCKED_SETTLE_SECONDS = 3
+
+
+def still_blocked(pane_id: str) -> bool:
+    """Whether the pane is still blocked after a short wait."""
+    time.sleep(BLOCKED_SETTLE_SECONDS)
+    _snapshot_cache.clear()
+    herdr = os.environ.get("HERDR_BIN_PATH") or "herdr"
+    for pane in read_snapshot(herdr).get("panes", []):
+        if pane.get("pane_id") == pane_id:
+            return pane.get("agent_status") == "blocked"
+    # Unmeasurable means send: silence is the worse failure.
+    return True
 
 
 def suppress_minutes(config: dict, config_dir: str) -> int:
