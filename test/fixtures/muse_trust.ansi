@@ -1,0 +1,10 @@
+[0m[38;5;2mhost[0m [0m[38;5;4m~/work/cart$[0m muse --provider echo
+[0m[1m[38;2;204;211;219mDo you trust this workspace?[0m
+[0m[1m[38;2;138;144;152mWorkspace: [0m[38;2;90;160;255m/Users/x/work/cart[0m
+
+[0m[38;2;204;211;219mTrusting allows project-local skills, rules, hooks, and plugin config to load before the model runs.[0m
+[0m[38;2;255;225;74mOnly trust this workspace when you trust its contents.[0m
+[0m[1m[38;2;90;160;255m>[0m[38;2;103;108;116m [0m[1m[38;2;90;160;255m1[0m[1m[38;2;204;211;219m  Trust and continue[0m
+[0m[38;2;103;108;116m  [0m[1m[38;2;138;190;183m2[0m[38;2;138;144;152m  Quit[0m
+
+[0m[38;2;103;108;116mUse Up/Down or 1/2, then Enter. Esc quits.[0m

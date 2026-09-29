@@ -13,11 +13,13 @@ herdr workspace create --cwd ~/shepherd-test/beta  --label test-pi     --no-focu
 herdr workspace create --cwd ~/shepherd-test/gamma --label test-codex  --no-focus
 herdr workspace create --cwd ~/shepherd-test/delta --label test-opencode --no-focus
 herdr workspace create --cwd ~/shepherd-test/omega --label test-omp      --no-focus
+herdr workspace create --cwd ~/shepherd-test/muse  --label test-muse     --no-focus
 herdr pane run <pane> claude      # one of each, they parse differently
 herdr pane run <pane> pi -e <pi>/examples/extensions/question.ts
 herdr pane run <pane> codex
 herdr pane run <pane> opencode
 herdr pane run <pane> omp
+herdr pane run <pane> muse --approval-mode untrusted --approval-judge off
 ```
 
 Pi has no question tool of its own; the example extension gives it one. It

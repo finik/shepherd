@@ -479,6 +479,7 @@ class AppState extends ChangeNotifier {
       final script = StringBuffer();
       final paths = <String, String>{};
       final codex = <(String, String)>[];
+      final muse = <(String, String)>[];
       final opencode = <(String, String)>[];
       for (final pane in panes) {
         // Git state is per working directory, and worth having even for a
@@ -496,8 +497,9 @@ class AppState extends ChangeNotifier {
           // have no last line at all. Its rollout is found the same way the
           // chat finds it: by the directory it was started in.
           final cwd = pane.cwd;
-          if (pane.agent == 'codex' && cwd != null && cwd.isNotEmpty) {
-            codex.add((pane.paneId, cwd));
+          if (cwd != null && cwd.isNotEmpty) {
+            if (pane.agent == 'codex') codex.add((pane.paneId, cwd));
+            if (pane.agent == 'muse') muse.add((pane.paneId, cwd));
           }
           continue;
         }
@@ -527,6 +529,15 @@ class AppState extends ChangeNotifier {
             '<<\'SHEPHERD_CODEX\'\n'
             '$_codexPython\n'
             'SHEPHERD_CODEX');
+      }
+      if (muse.isNotEmpty) {
+        final args = muse
+            .map((p) => '${_shellQuote(p.$1)} ${_shellQuote(p.$2)}')
+            .join(' ');
+        script.writeln('python3 - $args >> "\$SHEPHERD_LIST" '
+            '<<\'SHEPHERD_MUSE\'\n'
+            '$_musePython\n'
+            'SHEPHERD_MUSE');
       }
       if (opencode.isNotEmpty) {
         script.writeln(_opencodeSync(opencode, list: '"\$SHEPHERD_LIST"'));
@@ -721,6 +732,39 @@ def codex_bits(record):
     return None
 
 
+def muse_bits(record):
+    # Muse: an event log; the conversation is runtime.session run events.
+    if record.get('payload_type') != 'runtime.session':
+        return None
+    payload = record.get('payload') or {}
+    event = payload.get('event') if isinstance(payload, dict) else None
+    if payload.get('kind') != 'run' or not isinstance(event, dict):
+        return None
+    kind = event.get('kind')
+    if kind == 'assistant_message_committed':
+        return ('reply', (event.get('text') or '').strip())
+    if kind == 'reasoning_summary_committed':
+        return ('live', (event.get('text') or '').strip())
+    if kind == 'assistant_tool_calls_committed':
+        calls = event.get('tool_calls') or []
+        if calls and isinstance(calls[-1], dict):
+            call = calls[-1]
+            try:
+                args = json.loads(call.get('args') or '{}')
+            except ValueError:
+                args = {}
+            detail = ''
+            if isinstance(args, dict):
+                detail = (args.get('description') or args.get('path') or
+                          args.get('command') or '')
+                detail = str(detail).strip().splitlines()[0] if str(detail).strip() else ''
+                if args.get('path') and not args.get('description'):
+                    detail = detail.rsplit('/', 1)[-1]
+            return ('live', (call.get('name') or 'tool') +
+                    (' - ' + detail if detail else ''))
+    return None
+
+
 for line in wanted:
     line = line.rstrip('\n')
     if not line:
@@ -746,13 +790,14 @@ for line in wanted:
             # response_item, whose tool calls mention neither.
             if not entry:
                 continue
-            if '"assistant"' not in entry and '"response_item"' not in entry:
+            if ('"assistant"' not in entry and '"response_item"' not in entry
+                    and '"runtime.session"' not in entry):
                 continue
             try:
                 record = json.loads(entry)
             except ValueError:
                 continue
-            bits = codex_bits(record)
+            bits = codex_bits(record) or muse_bits(record)
             if bits is not None:
                 if bits[0] == 'reply' and bits[1]:
                     reply, live = bits[1], ''
@@ -1088,8 +1133,10 @@ for line in wanted:
     }
   }
 
-  /// The newest Codex rollout started in this pane's directory.
-  Future<String?> _findCodexRollout(Pane pane) async {
+  /// The newest session started in this pane's directory, for an agent that
+  /// tells Herdr nothing about its session. [script] is the agent's own
+  /// lookup; [what] names what it looks for, for the diagnostic.
+  Future<String?> _findByFolder(Pane pane, String script, String what) async {
     final ssh = _ssh;
     final cwd = pane.cwd;
     if (ssh == null || cwd == null || cwd.isEmpty) return null;
@@ -1097,25 +1144,63 @@ for line in wanted:
       final out = await HerdrClient.run(
         ssh,
         'python3 - ${_shellQuote(pane.paneId)} ${_shellQuote(cwd)} '
-        '<<\'SHEPHERD_CODEX\'\n'
-        '$_codexPython\n'
-        'SHEPHERD_CODEX',
+        '<<\'SHEPHERD_FIND\'\n'
+        '$script\n'
+        'SHEPHERD_FIND',
         timeout: const Duration(seconds: 25),
       );
       final line = utf8.decode(out, allowMalformed: true).trim();
       final space = line.indexOf(' ');
       final path = space < 0 ? '' : line.substring(space + 1).trim();
-      if (path.isEmpty) {
-        transcriptDiagnostic =
-            'No Codex rollout found for\n$cwd\nunder ~/.codex/sessions';
-      }
+      if (path.isEmpty) transcriptDiagnostic = 'No $what found for\n$cwd';
       return path.isEmpty ? null : path;
     } catch (e) {
-      transcriptDiagnostic = 'Could not look for a Codex rollout: $e';
+      transcriptDiagnostic = 'Could not look for $what: $e';
       _lookupFailed = true;
       return null;
     }
   }
+
+  /// Muse files a session as `~/.local/share/muse/sessions/YYYY/MM/DD/ID/`
+  /// session.jsonl; its metadata, a few lines in, names the folder it was
+  /// started in. Subagents keep files of their own below it. Arguments are
+  /// pane id and working directory, in pairs; newest wins.
+  static const _musePython = r'''import json, os, sys
+wanted = {}
+for i in range(1, len(sys.argv) - 1, 2):
+    wanted[os.path.realpath(sys.argv[i + 1])] = sys.argv[i]
+best = {}
+root = os.path.expanduser('~/.local/share/muse/sessions')
+for base, dirs, names in os.walk(root):
+    dirs[:] = [d for d in dirs if d != 'subagent' and not d.startswith('.')]
+    if 'session.jsonl' not in names:
+        continue
+    path = os.path.join(base, 'session.jsonl')
+    cwd = None
+    try:
+        with open(path) as handle:
+            for _ in range(20):
+                line = handle.readline()
+                if not line:
+                    break
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                inner = (record.get('payload') or {}).get('record') or {}
+                cwd = inner.get('workspace_root') or inner.get('cwd')
+                if cwd:
+                    break
+    except OSError:
+        continue
+    pane = wanted.get(os.path.realpath(cwd)) if cwd else None
+    if not pane:
+        continue
+    stamp = os.path.getmtime(path)
+    if pane not in best or stamp > best[pane][0]:
+        best[pane] = (stamp, path)
+for pane, (_, path) in best.items():
+    sys.stdout.write('%s %s\n' % (pane, path))''';
 
   /// Codex files a session under ~/.codex/sessions/YYYY/MM/DD and names it
   /// after the time and a uuid; the working directory is inside, on the first
@@ -1500,10 +1585,10 @@ def shrink(value, depth=0):
                 # Codex's reasoning, sealed. Kilobytes of base64 that nothing
                 # on the phone can read.
                 out[k] = ''
-            elif k == 'data' and isinstance(v, str):
+            elif k in ('data', 'base64_data') and isinstance(v, str) and v:
                 # Say how big the picture is before dropping it: the reader
                 # decides whether it is worth fetching over a phone link.
-                out['data'] = ''
+                out[k] = ''
                 out['__bytes'] = (len(v) * 3) // 4
                 pending.append((out, v))
             else:
@@ -1769,6 +1854,10 @@ def find_all(node, depth=0, out=None):
             find_all(item, depth + 1, out)
         return out
     if not isinstance(node, dict):
+        return out
+    # Muse: {kind: image, media_type, base64_data}.
+    if node.get('kind') == 'image' and node.get('base64_data'):
+        out.append((node.get('media_type') or '', node['base64_data']))
         return out
     if node.get('type') in ('image', 'input_image'):
         # Codex writes a data: URL where the others write a payload field.
@@ -2044,7 +2133,11 @@ if found:
     // pane knows. The file says which directory it was started in, which is
     // the one thing that ties it back to this pane.
     if (session == null || session.value.isEmpty) {
-      return pane.agent == 'codex' ? _findCodexRollout(pane) : null;
+      return switch (pane.agent) {
+        'codex' => _findByFolder(pane, _codexPython, 'a Codex rollout'),
+        'muse' => _findByFolder(pane, _musePython, 'a muse session'),
+        _ => null,
+      };
     }
     if (session.isPath) return session.value;
     if (pane.agent == 'opencode') return _mirrorOpencode(pane, session.value);
@@ -2079,11 +2172,17 @@ if found:
     // The selection marker differs by agent: Claude draws `❯`, Codex `›`,
     // and OpenCode draws none — its selected option is only a colour.
     final option = RegExp(r'^[\s❯›>▸▶→*•]*(\d)[.)]\s+(.+)$');
+    // Muse leaves the dot out: "> 1  Trust and continue". Without one, a
+    // numbered line is a menu only when the cursor opens the run — a diff
+    // has "1  todo" too.
+    final bare = RegExp(r'^([\s❯›>▸▶→*•]*)(\d) {2,}(\S.*)$');
     final styles = <String>[];
     final gutter = <bool>[];
     final lines = <String>[];
     final rawLines = raw.split(RegExp(r'\r?\n'));
     final plain = <String>[];
+    // Only OpenCode draws a sidebar, and only it draws the `┃` panel.
+    final sidebar = raw.contains('┃');
     for (var line in rawLines) {
       // The screen may come with its colours; they are kept only as the
       // style an option's number is drawn in.
@@ -2106,8 +2205,10 @@ if found:
       line = line.split(RegExp(r'[│┌└┐┘]')).first;
       // OpenCode's sidebar shares the lines too, past a wide gap — or alone
       // on a line, far to the right.
-      line = line.replaceFirst(RegExp(r'(?<=\S) {6,}\S.*$'), '');
-      if (RegExp(r'^ {20,}\S').hasMatch(line)) line = '';
+      if (sidebar) {
+        line = line.replaceFirst(RegExp(r'(?<=\S) {6,}\S.*$'), '');
+        if (RegExp(r'^ {20,}\S').hasMatch(line)) line = '';
+      }
       lines.add(line.trimRight());
     }
 
@@ -2116,8 +2217,20 @@ if found:
     // of it — a diff above the menu has line numbers too.
     final choices = <Choice>[];
     var menuStart = -1;
+    var bareRun = false;
     for (var i = 0; i < lines.length; i++) {
-      final match = option.firstMatch(lines[i].trim());
+      var match = option.firstMatch(lines[i].trim());
+      if (match == null) {
+        final loose = bare.firstMatch(lines[i]);
+        final opens = loose != null &&
+            choices.isEmpty &&
+            loose.group(2) == '1' &&
+            RegExp(r'[❯›>]').hasMatch(loose.group(1)!);
+        if (loose != null && (opens || (bareRun && choices.isNotEmpty))) {
+          match = option.firstMatch('${loose.group(2)}. ${loose.group(3)}');
+          if (opens) bareRun = true;
+        }
+      }
       if (match == null) continue;
       if (int.parse(match.group(1)!) != choices.length + 1) continue;
       if (choices.isEmpty) menuStart = i;
@@ -2172,6 +2285,7 @@ if found:
               choices: const <Choice>[]);
     }
     _markSelectedByStyle(choices, lines, styles, option);
+    _splitColumns(choices);
 
     // The question is in the block directly above the menu: everything up to
     // the rule, the agent's last bullet, or the prompt line that closes it
@@ -2355,6 +2469,25 @@ if found:
     return null;
   }
 
+  /// Muse sets each option's explanation beside it, in a column of its own:
+  /// "1. Yes (Recommended)  Round the total…". When every option has text
+  /// after a gap at the same place, that text is the explanation.
+  static void _splitColumns(List<Choice> choices) {
+    if (choices.length < 2 || choices.any((c) => c.detail.isNotEmpty)) return;
+    final gap = RegExp(r'^(.*?\S) {2,}(\S.*)$');
+    final matches = [for (final c in choices) gap.firstMatch(c.label)];
+    if (matches.any((m) => m == null)) return;
+    final column = {for (final m in matches) m!.start + m.group(0)!.length - m.group(2)!.length};
+    if (column.length != 1) return;
+    for (var i = 0; i < choices.length; i++) {
+      choices[i] = Choice(
+        label: matches[i]!.group(1)!.trim(),
+        detail: matches[i]!.group(2)!.trim(),
+        selected: choices[i].selected,
+      );
+    }
+  }
+
   /// With no marker on any option, the selected one is the option line drawn
   /// in a style none of the others share.
   static void _markSelectedByStyle(List<Choice> choices, List<String> lines,
@@ -2494,9 +2627,9 @@ if found:
     notifyListeners();
     try {
       await rpc.sendText(pane.paneId, text);
-      // A beat before the return key: Codex ignores an Enter that arrives
-      // while it is still taking in the pasted text. Claude and Pi do not
-      // need it and do not mind it.
+      // A beat before the return key: Codex and muse ignore an Enter that
+      // arrives while they are still taking in the pasted text. The others do
+      // not need it and do not mind it.
       await Future<void>.delayed(const Duration(milliseconds: 250));
       await rpc.sendKeys(pane.paneId, const ['enter']);
     } catch (e) {

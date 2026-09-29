@@ -102,6 +102,37 @@ void main() {
     expect(AppState.menuKeys(asked, 2), ['down', 'enter']);
   });
 
+  test("muse's trust prompt is a menu though its numbers have no dot", () {
+    final asked = AppState.parsePrompt(
+        File('test/fixtures/muse_trust.ansi').readAsStringSync());
+    expect(asked.question, 'Do you trust this workspace?');
+    expect(asked.choices.map((c) => c.label), ['Trust and continue', 'Quit']);
+    expect(asked.choices.first.selected, isTrue);
+  });
+
+  test("muse's approval comes with the command it would run", () {
+    final asked = AppState.parsePrompt(
+        File('test/fixtures/muse_permission.ansi').readAsStringSync());
+    expect(asked.question, startsWith('Would you like to run the following command?'));
+    expect(asked.question, contains(r'$ touch notes.txt'));
+    expect(asked.choices.map((c) => c.label), [
+      'Allow this stage once',
+      'Always allow in this workspace: touch ...',
+      'Abort the entire command',
+    ]);
+    expect(asked.choices.first.selected, isTrue);
+  });
+
+  test("muse's question keeps each explanation apart from its label", () {
+    final asked = AppState.parsePrompt(
+        File('test/fixtures/muse_question.ansi').readAsStringSync());
+    expect(asked.question, 'Should total round to cents?');
+    expect(asked.choices.map((c) => c.label),
+        ['Yes (Recommended)', 'No', 'None of the above']);
+    expect(asked.choices[1].detail, 'Keep full precision without rounding to cents.');
+    expect(asked.choices.first.selected, isTrue);
+  });
+
   test('an opencode pane is read with the Pi parser', () {
     expect(TranscriptAdapter.forAgent('opencode'), isA<PiAdapter>());
   });

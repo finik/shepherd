@@ -25,6 +25,7 @@ class AgentGlyph extends StatelessWidget {
       'codex' => _CodexGlyph(),
       'opencode' => _OpencodeGlyph(d.ink),
       'omp' => _OmpGlyph(),
+      'muse' => _MetaGlyph(),
       _ => null,
     };
     if (painter == null) {
@@ -211,4 +212,24 @@ class _OmpGlyph extends CustomPainter {
 
   @override
   bool shouldRepaint(_OmpGlyph old) => false;
+}
+
+/// Meta's mark, for muse: an even-odd path on a 16 grid, spanning y 3–13.6,
+/// centred in the square.
+class _MetaGlyph extends CustomPainter {
+  static final _path = parseSvgPath(metaSymbolPath)
+    ..fillType = PathFillType.evenOdd;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scale = size.width / 16;
+    canvas.save();
+    canvas.translate(0, (size.height - 10.63 * scale) / 2 - 3 * scale);
+    canvas.scale(scale);
+    canvas.drawPath(_path, Paint()..color = metaBlue);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_MetaGlyph old) => false;
 }

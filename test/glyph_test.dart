@@ -15,6 +15,14 @@ void main() {
     expect(codex.height, closeTo(250, 6));
   });
 
+  test("Meta's mark, arcs and all, spans its drawing", () {
+    final meta = parseSvgPath(metaSymbolPath).getBounds();
+    expect(meta.left, closeTo(0, 0.2));
+    expect(meta.right, closeTo(16, 0.2));
+    expect(meta.top, closeTo(3, 0.2));
+    expect(meta.bottom, closeTo(13.63, 0.2));
+  });
+
   test('the parser handles the curves these paths are made of', () {
     // Codex's outline is almost entirely quadratics.
     final quadratic = parseSvgPath('M0 0 q10 0 10 10 q0 10 -10 10 z');
