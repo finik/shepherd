@@ -109,6 +109,18 @@ void main() {
     expect(scrollers.any((s) => s.scrollDirection == Axis.horizontal), isTrue);
   });
 
+  testWidgets('the menu opens from anywhere on the right edge',
+      (tester) async {
+    final state = working();
+    state.turns = [Turn(id: 'c0', userText: 'hi')];
+    await show(tester, state);
+    final edge = tester.getRect(find.byKey(const ValueKey('chat-menu')));
+    // Below the glyph, where a thumb lands as often as on it.
+    await tester.tapAt(Offset(edge.center.dx, edge.bottom - 4));
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Rename'), findsOneWidget);
+  });
+
   testWidgets('reconnecting is a wait, not an error', (tester) async {
     final state = working()..conn = ConnState.connecting;
     await tester.pumpWidget(MaterialApp(home: ChatScreen(state: state)));

@@ -166,45 +166,65 @@ class _ChatScreenState extends State<ChatScreen> {
   /// than truncating it into a subtitle.
   Widget _header(D d, AppState state, double pad) {
     final pane = state.selectedPane;
-    return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.fromLTRB(pad, 12, pad, 12),
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: d.divider, width: 2)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: d.divider, width: 2)),
+      ),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Icon(Icons.arrow_back, size: 15, color: d.ink3),
-                const SizedBox(width: 6),
-                AgentGlyph(agent: pane?.agent, size: 13),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '~/${pane?.shortCwd ?? ''}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: d.meta.copyWith(fontSize: 11, color: d.ink3),
+            Expanded(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).maybePop(),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(pad, 12, 0, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.arrow_back, size: 15, color: d.ink3),
+                          const SizedBox(width: 6),
+                          AgentGlyph(agent: pane?.agent, size: 13),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '~/${pane?.shortCwd ?? ''}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: d.meta.copyWith(fontSize: 11, color: d.ink3),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(pane?.sessionName ?? 'Shepherd',
+                          style: d.screenTitle),
+                    ],
                   ),
                 ),
-                // State is already unmistakable in the composer; this
-                // corner is better spent on the things you might want to do.
-                GestureDetector(
-                  onTap: () => _openMenu(pane),
-                  behavior: HitTestBehavior.opaque,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 10),
-                    child: Icon(Icons.more_vert, size: 20, color: d.ink2),
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 6),
-            Text(pane?.sessionName ?? 'Shepherd', style: d.screenTitle),
+            // The whole right edge opens the menu, not only the glyph, and it
+            // is its own target rather than a spot inside the back one.
+            GestureDetector(
+              key: const ValueKey('chat-menu'),
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _openMenu(pane),
+              child: SizedBox(
+                width: 56,
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Icon(Icons.more_vert, size: 22, color: d.ink2),
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
