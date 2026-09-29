@@ -170,6 +170,16 @@ with tempfile.TemporaryDirectory() as tmp:
           notify.opencode_prompt_time("herdr") == 1000)
     notify._snapshot_cache.clear()
 
+print("\na moment of blocked is not a question")
+notify.BLOCKED_SETTLE_SECONDS = 0
+original = notify.read_snapshot
+notify.read_snapshot = lambda _h: {"panes": [{"pane_id": "w1:p1", "agent_status": "working"}]}
+check("blocked then working is not sent", not notify.still_blocked("w1:p1"))
+notify.read_snapshot = lambda _h: {"panes": [{"pane_id": "w1:p1", "agent_status": "blocked"}]}
+check("still blocked is sent", notify.still_blocked("w1:p1"))
+notify.read_snapshot = original
+notify._snapshot_cache.clear()
+
 print("\nstate is recorded atomically")
 with tempfile.TemporaryDirectory() as tmp:
     state = os.path.join(tmp, "last-status.json")
