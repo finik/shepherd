@@ -3,7 +3,7 @@
 **Herdr is the right way to run coding agents. A terminal is the wrong way to
 read them on a phone.**
 
-[Herdr](https://herdr.dev) keeps Claude Code, Pi, Codex, OpenCode and friends in panes on
+[Herdr](https://herdr.dev) keeps Claude Code, Pi, Codex, OpenCode, muse and friends in panes on
 your machine, where your files and your keys and your build already are. That is
 where they belong. But when you are away from the desk and you want to know what
 an agent decided — or it is stuck waiting on a yes — the answer is not a
@@ -133,7 +133,7 @@ can watch separate sets of agents.
   phone ──SSH──▶ host ──unix socket──▶ herdr
                   │
                   ├──▶ ~/.claude/…/*.jsonl  ~/.pi/…/*.jsonl  ~/.omp/…/*.jsonl
-                  ├──▶ ~/.codex/sessions/…/*.jsonl
+                  ├──▶ ~/.codex/sessions/…/*.jsonl  ~/.local/share/muse/sessions/…/session.jsonl
                   └──▶ ~/.local/share/opencode/opencode.db
 ```
 
@@ -142,8 +142,9 @@ One SSH connection does everything. Herdr's Unix socket is forwarded over it
 `session.snapshot` for the topology, `events.subscribe` for changes,
 `pane.send_input` to type into a pane. Herdr also tells us where each pane's
 transcript file lives, and that file — tailed over the same connection — is
-where the conversation comes from. Two agents differ. Herdr reports no session
-for Codex, so the app finds the newest rollout started in the pane's directory.
+where the conversation comes from. Three agents differ. Herdr reports no session
+for Codex or muse, so the app finds the newest one started in the pane's
+directory.
 OpenCode keeps its sessions in SQLite rather than in a file, so a helper copies
 each finished part, once, into an append-only JSONL mirror under
 `~/.shepherd/opencode/`, and the app reads and tails that like any transcript.
@@ -201,14 +202,15 @@ Testing on a real phone against a real host is described in
 - **No terminal control beyond answering.** A question with numbered choices is
   answerable, and so is anything that takes prose. Driving a TUI — cycling
   modes, scrolling a pager, anything that wants a specific key — is not.
-- **Five agents read properly.** Claude Code, Pi, omp, Codex and OpenCode are
-  read and answered from the phone, verified against real sessions, pictures,
+- **Six agents read properly.** Claude Code, Pi, omp, Codex, OpenCode and muse
+  are read and answered from the phone, verified against real sessions, pictures,
   questions and permission prompts included. Anything else Herdr reports is
   read with the Claude-shaped parser, which tolerates more than it should but
   was not written for it.
 - **Codex's thinking stays sealed.** Codex encrypts its reasoning on disk, so the
   steps behind a Codex turn are its tool calls only. Claude Code does not write
-  its thinking at all; Pi and OpenCode do, and it shows.
+  its thinking at all; Pi, omp and OpenCode do, and muse writes a summary of
+  its own, all of which shows.
 - **Untested outside Android.** It is a Flutter app, and little in it is
   platform-specific beyond the packaging and the notification plumbing — but
   iOS has never been built or run.

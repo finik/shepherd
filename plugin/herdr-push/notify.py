@@ -151,13 +151,15 @@ def last_typed(path: str):
             lines = tail.split(b"\n")
             # The first line may be cut off unless this is the file's start.
             for line in reversed(lines if start == 0 else lines[1:]):
-                if b'"user"' not in line:
+                if b'"user"' not in line and b'"started"' not in line:
                     continue
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
                 if typed_by_you(record):
+                    if isinstance(record.get("recorded_at"), (int, float)):
+                        return record["recorded_at"] / 1e6
                     return parse_time(record.get("timestamp"))
     return None
 
@@ -171,6 +173,13 @@ def typed_by_you(record) -> bool:
     origin = record.get("origin")
     if isinstance(origin, dict) and origin.get("kind") not in (None, "human"):
         return False
+    # Muse keeps an event log; your prompt starts a run.
+    if record.get("payload_type") == "runtime.session":
+        payload = record.get("payload") or {}
+        event = payload.get("event") or {}
+        return (payload.get("kind") == "run" and event.get("kind") == "started"
+                and isinstance(event.get("prompt"), str)
+                and bool(event["prompt"].strip()))
     message = record.get("message")
     if isinstance(message, dict) and message.get("role") == "user":
         # Tool results are recorded as user messages; they are the agent
@@ -222,8 +231,9 @@ def transcript_paths(herdr: str):
         if not value:
             # Herdr reports no session for Codex; its rollout is found by
             # the directory it was started in, as the app does.
-            if pane.get("agent") == "codex" and pane.get("cwd"):
-                found = codex_rollout(pane["cwd"])
+            if pane.get("agent") in ("codex", "muse") and pane.get("cwd"):
+                find = codex_rollout if pane["agent"] == "codex" else muse_session
+                found = find(pane["cwd"])
                 if found:
                     paths.append(found)
             continue
@@ -258,6 +268,40 @@ def opencode_prompt_time(herdr: str):
     except sqlite3.Error:
         return None
     return row[0] / 1000 if row and row[0] else None
+
+
+def muse_session(cwd):
+    """The newest muse session started in this directory."""
+    want = os.path.realpath(cwd)
+    best = None
+    root = os.path.expanduser("~/.local/share/muse/sessions")
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if d != "subagent" and not d.startswith(".")]
+        if "session.jsonl" not in names:
+            continue
+        path = os.path.join(base, "session.jsonl")
+        folder = None
+        try:
+            with open(path) as handle:
+                for _ in range(20):
+                    line = handle.readline()
+                    if not line:
+                        break
+                    try:
+                        inner = (json.loads(line).get("payload") or {}).get("record") or {}
+                    except (ValueError, AttributeError):
+                        continue
+                    folder = inner.get("workspace_root") or inner.get("cwd")
+                    if folder:
+                        break
+        except OSError:
+            continue
+        if not folder or os.path.realpath(folder) != want:
+            continue
+        stamp = os.path.getmtime(path)
+        if best is None or stamp > best[0]:
+            best = (stamp, path)
+    return best[1] if best else None
 
 
 def codex_rollout(cwd: str):

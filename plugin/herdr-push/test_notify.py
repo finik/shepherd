@@ -111,6 +111,29 @@ check("a typed prompt is", notify.typed_by_you({
     "type": "user", "promptSource": "typed", "origin": {"kind": "human"},
     "message": {"role": "user", "content": "check the history"}}))
 
+print("\nwhat you typed into muse counts too")
+check("a muse prompt is you", notify.typed_by_you({
+    "payload_type": "runtime.session", "recorded_at": 1790557732000000,
+    "payload": {"kind": "run", "event": {"kind": "started",
+                                         "prompt": "run the tests"}}}))
+check("a muse reply is not", not notify.typed_by_you({
+    "payload_type": "runtime.session",
+    "payload": {"kind": "run", "event": {
+        "kind": "assistant_message_committed", "text": "done"}}}))
+with tempfile.TemporaryDirectory() as tmp:
+    log = os.path.join(tmp, "session.jsonl")
+    with open(log, "w") as handle:
+        handle.write(json.dumps({"payload_type": "runtime.session",
+                                 "recorded_at": 1790557732000000,
+                                 "payload": {"kind": "run", "event": {
+                                     "kind": "started", "prompt": "hi"}}}) + "\n")
+        handle.write(json.dumps({"payload_type": "runtime.session",
+                                 "recorded_at": 1790557799000000,
+                                 "payload": {"kind": "run", "event": {
+                                     "kind": "terminal"}}}) + "\n")
+    check("its time is when the prompt was recorded",
+          notify.last_typed(log) == 1790557732.0)
+
 print("\nwhat you typed into codex counts too")
 check("a codex prompt is you", notify.typed_by_you({
     "type": "response_item", "payload": {

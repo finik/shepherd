@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'codex.dart';
+import 'muse.dart';
 import 'turn.dart';
 
 /// Turns an agent's JSONL transcript into [Turn]s.
@@ -30,6 +31,8 @@ abstract class TranscriptAdapter {
         return PiAdapter();
       case 'codex':
         return CodexAdapter();
+      case 'muse':
+        return MuseAdapter();
       case 'claude':
         return ClaudeAdapter();
       default:
@@ -227,6 +230,9 @@ String _resultText(dynamic content) {
   }
   return '';
 }
+
+String describeTool(String name, Map<String, dynamic>? input) =>
+    _describeTool(name, input);
 
 /// "Read chat-ui.md" says what an agent is doing; "Read" does not.
 ///
@@ -635,6 +641,7 @@ class JsonlFramer {
   /// "image"` with base64, Pi uses `mimeType`, Codex writes `input_image`
   /// with a data URL.
   static bool _looksLikeImage(String text) =>
+      text.contains('"base64_data"') ||
       (text.contains('"image"') || text.contains('input_image') ||
               text.contains('image_url')) &&
       (text.contains('base64') || text.contains('mimeType') ||

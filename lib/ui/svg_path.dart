@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 /// Minimal SVG path parser — enough for flat logo marks.
 ///
-/// Supports M/m, L/l, H/h, V/v, C/c, Q/q and Z/z, which is what the agent
-/// symbols use — Codex's outline is almost entirely quadratics. Anything
+/// Supports M/m, L/l, H/h, V/v, C/c, Q/q, A/a and Z/z, which is what the
+/// agent symbols use — Codex's outline is almost entirely quadratics, and
+/// Meta's mark has arcs. Anything
 /// richer would be a reason to take on a real SVG dependency rather than
 /// extend this.
 Path parseSvgPath(String d) {
@@ -81,6 +82,19 @@ Path parseSvgPath(String d) {
         final x1 = cx + next(), y1 = cy + next();
         final ex = cx + next(), ey = cy + next();
         path.quadraticBezierTo(x1, y1, ex, ey);
+        cx = ex;
+        cy = ey;
+      case 'A':
+      case 'a':
+        final rx = next(), ry = next(), rotation = next();
+        final large = next() != 0, sweep = next() != 0;
+        final ex = (command == 'a' ? cx : 0) + next();
+        final ey = (command == 'a' ? cy : 0) + next();
+        path.arcToPoint(Offset(ex, ey),
+            radius: Radius.elliptical(rx, ry),
+            rotation: rotation,
+            largeArc: large,
+            clockwise: sweep);
         cx = ex;
         cy = ey;
       case 'Z':
@@ -181,3 +195,21 @@ const codexSymbolPath =
 const codexViolet = Color(0xFFB1A7FF);
 const codexBlue = Color(0xFF7A9DFF);
 const codexIndigo = Color(0xFF3941FF);
+
+/// Meta's symbol, which muse is shown with (viewBox 0 0 16 16, even-odd).
+/// Trademark of Meta, used here to identify the agent.
+const metaSymbolPath =
+    "M8.217 5.243C9.145 3.988 10.171 3 11.483 3 13.96 3 16 6.153 16.001 "
+    "9.907c0 2.29-.986 3.725-2.757 3.725-1.543 0-2.395-.866-3.924-3.424"
+    "l-.667-1.123-.118-.197a55 55 0 0 0-.53-.877l-1.178 2.08c-1.673 "
+    "2.925-2.615 3.541-3.923 3.541C1.086 13.632 0 12.217 0 9.973 0 6.388 "
+    "1.995 3 4.598 3q.477-.001.924.122c.31.086.611.22.913.407.577.359 "
+    "1.154.915 1.782 1.714m1.516 2.224q-.378-.615-.727-1.133L9 6.326c.845"
+    "-1.305 1.543-1.954 2.372-1.954 1.723 0 3.102 2.537 3.102 5.653 0 "
+    "1.188-.39 1.877-1.195 1.877-.773 0-1.142-.51-2.61-2.87zM4.846 4.756"
+    "c.725.1 1.385.634 2.34 2.001A212 212 0 0 0 5.551 9.3c-1.357 2.126"
+    "-1.826 2.603-2.581 2.603-.777 0-1.24-.682-1.24-1.9 0-2.602 1.298"
+    "-5.264 2.846-5.264q.137 0 .27.018";
+
+/// Meta's blue.
+const metaBlue = Color(0xFF0081FB);
