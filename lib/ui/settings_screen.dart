@@ -147,8 +147,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _toggle(
                     d,
                     'Show chain of thought',
-                    'Reasoning steps, when the agent records them. Pi writes '
-                        'them; Claude Code does not, and Codex encrypts them.',
+                    'Reasoning steps, when the agent records them. Pi, omp '
+                        'and OpenCode write them and muse writes a summary; '
+                        'Claude Code does not, and Codex encrypts them.',
                     state.showThinking,
                     state.setShowThinking,
                   ),
@@ -195,9 +196,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       state.quietMinutes == 0
                           ? 'Every agent that stops is worth telling you '
                               'about.'
-                          : 'Stay quiet if the host saw a key or a click in '
-                              'the last ${state.quietMinutes} minutes — you '
-                              'are already watching it.',
+                          : 'Stay quiet about a finished agent if you '
+                              'prompted one on the host or used this app in '
+                              'the last ${state.quietMinutes} minutes. A '
+                              'question is always sent.',
                       style: d.prose.copyWith(fontSize: 13, color: d.ink3),
                     ),
                   ],
