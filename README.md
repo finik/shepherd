@@ -58,14 +58,18 @@ status word. Above: one asking, one working, one done.
 transcript, so what you read is what was said — markdown, code blocks and all —
 and it survives scrollback, resizes and reconnects. While an agent is working,
 the row and the chat show its current step: the thought it is having, or the
-tool it is running.
-
-A chat opens on its last few turns, however long the session has run: a
-transcript can be hundreds of megabytes, and the phone only needs the end of
-it. Scroll back past the top and the turns before it are fetched from the host,
-a screenful at a time, with a spinner while they come.
+tool it is running. A long session opens on its last few turns, and scrolling
+back fetches the ones before.
 
 <img src="docs/images/chat.png" width="320" alt="A conversation several turns in, each answer with its step count beneath">
+
+**Six agents, each read in its own format.** Claude Code, Pi, omp, Codex,
+OpenCode and muse each keep their sessions differently, and each is read as it
+writes them: replies, reasoning where the agent records it, tool calls with
+their results, pictures, failed turns, and the questions it asks you. Herdr
+names the session file for most of them; for Codex and muse the app finds the
+session started in the pane's folder, and OpenCode's SQLite store is mirrored
+into a file on the host.
 
 **The reasoning, folded away until you want it.** A turn reads as an answer,
 with one grey line under it — `4 STEPS · 3 TOOLS`. Tap that for the thinking and
@@ -135,21 +139,20 @@ another effort, or both. The switch applies to that session and leaves the
 agent's saved defaults as they were. omp and OpenCode take their model when they
 start. The chat's menu closes an agent, after asking.
 
-**How full the context is, and what it has cost.** A pie in the chat's header
+**How full the context is.** A pie in the chat's header
 shows how much of the model's context the latest call used, turning red at
 80%, with the model and its reasoning effort beneath. Tapping it opens the
 details, with buttons to compact or clear the context, each after asking.
 The context figure is what the agent itself recorded for its latest call, so it
 drops after a compaction without the app keeping count.
 
-The details also show what the session has cost at API rates, added up on the
-host from the whole transcript. Where the agent records the cost (Pi, omp and
-OpenCode on every reply, Claude Code from time to time) that figure is used.
-The rest is estimated by pricing the recorded tokens, from muse's own price
-list for muse and from
-[LiteLLM's public price table](https://github.com/BerriAI/litellm) for the
-others, and marked ≈. On a subscription it is what those calls would cost, not
-what you pay.
+**What a session has cost.** The pie's details show the session's cost at API
+rates, added up on the host from the whole transcript. Where the agent records
+the cost (Pi, omp and OpenCode on every reply, Claude Code from time to time)
+that figure is used; the rest is priced from the recorded tokens, with muse's
+own price list or [LiteLLM's public table](https://github.com/BerriAI/litellm),
+and marked ≈. On a subscription it is what those calls would cost, not what
+you pay.
 
 **What is left of each subscription.** Two thin bars beside the pie show the
 open agent's own plan — its five-hour window over its week, each with the time
@@ -263,11 +266,9 @@ Testing on a real phone against a real host is described in
   slash command. Driving a TUI — cycling modes, scrolling a pager, anything that
   wants a specific key — is not. Codex's model list is the one place the app
   reads a screen: it finds the row it wants and moves to it.
-- **Six agents read properly.** Claude Code, Pi, omp, Codex, OpenCode and muse
-  are read and answered from the phone, verified against real sessions, pictures,
-  questions and permission prompts included. Anything else Herdr reports is
-  read with the Claude-shaped parser, which tolerates more than it should but
-  was not written for it.
+- **Other agents are read as if they were Claude Code.** Anything Herdr reports
+  beyond the six is read with the Claude-shaped parser, which tolerates more than
+  it should but was not written for it.
 - **Codex's thinking stays sealed.** Codex encrypts its reasoning on disk, so the
   steps behind a Codex turn are its tool calls only. Claude Code does not write
   its thinking at all; Pi, omp and OpenCode do, and muse writes a summary of
