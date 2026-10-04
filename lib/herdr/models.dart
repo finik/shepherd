@@ -195,20 +195,6 @@ class Pane {
         stateSeq: stateSeq,
       );
 
-  Pane withStatus(String value) => Pane(
-        paneId: paneId,
-        tabId: tabId,
-        workspaceId: workspaceId,
-        agent: agent,
-        agentStatus: value,
-        cwd: cwd,
-        title: title,
-        label: label,
-        agentSession: agentSession,
-        focused: focused,
-        stateSeq: stateSeq,
-      );
-
   bool get isWorking => agentStatus == 'working';
   bool get isBlocked => agentStatus == 'blocked';
 

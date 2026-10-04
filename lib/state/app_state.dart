@@ -88,37 +88,7 @@ const _defaultSocketSuffix = '.config/herdr/herdr.sock';
 class AppState extends ChangeNotifier {
   ConnState conn = ConnState.idle;
   String? error;
-  /// The host as Herdr last described it, with one correction: a Pi or omp
-  /// pane showing a question is waiting on you whatever Herdr says.
-  HostState get host => _hostView ??= _withScreenBlocks(_host);
-  set host(HostState value) {
-    _host = value;
-    _hostView = null;
-  }
-
-  HostState _host = const HostState();
-  HostState? _hostView;
-
-  /// Panes Herdr reports as working whose screen shows a question. Pi's
-  /// Herdr integration reports blocked only when the extension asking says
-  /// so, and a question tool need not.
-  final Set<String> _screenBlocked = {};
-
-  HostState _withScreenBlocks(HostState raw) {
-    if (_screenBlocked.isEmpty) return raw;
-    Pane mark(Pane p) => _screenBlocked.contains(p.paneId) && p.isWorking
-        ? p.withStatus('blocked')
-        : p;
-    return HostState(
-      workspaces: raw.workspaces,
-      tabs: raw.tabs,
-      panes: raw.panes.map(mark).toList(),
-      agents: raw.agents.map(mark).toList(),
-      focusedWorkspaceId: raw.focusedWorkspaceId,
-      focusedTabId: raw.focusedTabId,
-      focusedPaneId: raw.focusedPaneId,
-    );
-  }
+  HostState host = const HostState();
   String? selectedPaneId;
 
   List<Turn> turns = const [];
@@ -170,6 +140,7 @@ class AppState extends ChangeNotifier {
   /// The last stretch of bytes consumed from each transcript, used to prove
   /// the file was appended to rather than rewritten under the same offset.
   final Map<String, String> _anchors = {};
+
   /// Where in each transcript the history on screen begins, and how many
   /// turns were fetched from before that on request.
   final Map<String, int> _windowStart = {};
@@ -492,7 +463,7 @@ class AppState extends ChangeNotifier {
       if (snap == null) return;
       _pollFailures = 0;
       final before = selectedPane?.agentSession?.value;
-      final changed = _statusesDiffer(_host, snap);
+      final changed = _statusesDiffer(host, snap);
       host = snap;
       if (changed) notifyListeners();
       if (selectedPane?.agentSession?.value != before) {
@@ -2574,7 +2545,7 @@ if found:
         (l) => RegExp(r'enter (select|to select|confirm)', caseSensitive: false)
             .hasMatch(l));
     if (hint < 0) return null;
-    final marked = RegExp(r'^(\s*)[❯›]\s+(\S.*)$');
+    final marked = RegExp(r'^(\s*)[❯›→]\s+(\S.*)$');
     for (var i = hint - 1; i >= 0 && i >= hint - 12; i--) {
       final m = marked.firstMatch(lines[i]);
       if (m == null) continue;
@@ -2974,38 +2945,19 @@ if found:
     final now = DateTime.now();
     if (now.difference(_lastBlockedRead) < const Duration(seconds: 3)) return;
     _lastBlockedRead = now;
-    // Pi and omp may be asking while Herdr says they are working, so their
-    // screens are read too; only a menu with its selection hint counts.
-    final candidates = _host.panes
-        .where((p) =>
-            p.agentStatus == 'blocked' ||
-            (p.isWorking && const {'pi', 'omp'}.contains(p.agent)))
-        .toList();
+    // Only panes the agent itself reports as waiting are read: the screen is
+    // where the question is, not where Shepherd learns that there is one.
+    final blocked =
+        host.panes.where((p) => p.agentStatus == 'blocked').toList();
     _blockedPrompts.removeWhere(
-        (id, _) => !candidates.any((p) => p.paneId == id));
-    for (final pane in candidates) {
+        (id, _) => !blocked.any((p) => p.paneId == id));
+    for (final pane in blocked) {
       try {
         // The rendered screen, not the scrollback: a permission menu is drawn
         // over the pane and never becomes output.
         final text = await rpc.readPane(pane.paneId,
             source: 'visible', lines: 30, ansi: true);
         final asked = parsePrompt(text);
-        if (pane.isWorking) {
-          final asking = asked.choices.isNotEmpty &&
-              RegExp(r'Enter to select|↑↓ navigate').hasMatch(text);
-          final was = _screenBlocked.contains(pane.paneId);
-          if (asking != was) {
-            asking
-                ? _screenBlocked.add(pane.paneId)
-                : _screenBlocked.remove(pane.paneId);
-            _hostView = null;
-            notifyListeners();
-          }
-          if (!asking) {
-            _blockedPrompts.remove(pane.paneId);
-            continue;
-          }
-        }
         if (asked.question.isEmpty && asked.choices.isEmpty) continue;
         final held = _blockedPrompts[pane.paneId];
         if (held == null ||

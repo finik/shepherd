@@ -133,6 +133,14 @@ void main() {
     expect(asked.choices.first.selected, isTrue);
   });
 
+  test("a Pi dialog's choices and cursor are read", () {
+    final asked = AppState.parsePrompt(
+        File('test/fixtures/pi_select.ansi').readAsStringSync());
+    expect(asked.choices.map((c) => c.label), ['Tea', 'Coffee']);
+    expect(asked.choices.map((c) => c.selected), [true, false]);
+    expect(asked.question, contains('Tea or coffee?'));
+  });
+
   test('an opencode pane is read with the Pi parser', () {
     expect(TranscriptAdapter.forAgent('opencode'), isA<PiAdapter>());
   });
