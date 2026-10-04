@@ -62,13 +62,25 @@ const _backfillBytes = 512 * 1024;
 /// Widen the history window until it holds at least this many turns. One
 /// record can be tens of KB, so a fixed window covers wildly different
 /// amounts of conversation depending on how the agent has been working.
-const _minBackfillTurns = 12;
+const _minBackfillTurns = 5;
 
 /// Ceiling on that widening; past this the wire cost is not worth it.
 const _maxBackfillBytes = 2 * 1024 * 1024;
 
-/// What the live adapter keeps, matching what the parse isolate keeps.
-const _maxLiveTurns = 80;
+/// How much conversation the phone holds: the last turns, and within a long
+/// turn its last thinking and tool steps. Older history stays on the host.
+const _maxLiveTurns = 10;
+const _maxStepsPerTurn = 60;
+
+/// [turns] cut to what the phone holds.
+List<Turn> _trimHistory(List<Turn> turns) {
+  final kept =
+      turns.length <= _maxLiveTurns ? turns : turns.sublist(turns.length - _maxLiveTurns);
+  for (final turn in kept) {
+    turn.trimSteps(_maxStepsPerTurn);
+  }
+  return kept;
+}
 
 /// Where Herdr's default session socket lives, relative to the login home.
 const _defaultSocketSuffix = '.config/herdr/herdr.sock';
@@ -158,6 +170,72 @@ class AppState extends ChangeNotifier {
   /// The last stretch of bytes consumed from each transcript, used to prove
   /// the file was appended to rather than rewritten under the same offset.
   final Map<String, String> _anchors = {};
+  /// Where in each transcript the history on screen begins, and how many
+  /// turns were fetched from before that on request.
+  final Map<String, int> _windowStart = {};
+  final Map<String, int> _olderTurns = {};
+
+  /// Whether the open conversation has history before what is on screen.
+  bool get hasOlder => (_windowStart[_boundPath] ?? 0) > 0;
+
+  /// Whether earlier history is being fetched.
+  bool loadingOlder = false;
+
+  /// Fetch the turns before what is on screen, from the host, and put them
+  /// ahead of it. The phone keeps only the recent end of a conversation;
+  /// this is how the rest is read, when somebody scrolls back for it.
+  Future<void> loadOlder() async {
+    final ssh = _ssh;
+    final path = _boundPath;
+    final adapter = _adapter;
+    final pane = selectedPane;
+    final end = _windowStart[path] ?? 0;
+    if (ssh == null || path == null || adapter == null || pane == null ||
+        loadingOlder || end <= 0) {
+      return;
+    }
+    loadingOlder = true;
+    notifyListeners();
+    final epoch = _bindEpoch;
+    try {
+      final raw = await HerdrClient.run(
+        ssh,
+        'python3 - ${_shellQuote(path)} $_backfillBytes $_minBackfillTurns $end '
+        '<<\'SHEPHERD_WINDOW\'\n'
+        '$_thumbnailPython\n$_windowPython\n'
+        'SHEPHERD_WINDOW',
+        timeout: const Duration(seconds: 45),
+      );
+      if (epoch != _bindEpoch || _boundPath != path) return;
+      final text = utf8.decode(raw, allowMalformed: true);
+      final start = RegExp(r'^ST (\d+)$', multiLine: true).firstMatch(text);
+      final parsed = await compute(parseTranscript, {
+        'text': text,
+        'agent': pane.agent ?? '',
+        'base': '0',
+      });
+      if (epoch != _bindEpoch || _boundPath != path) return;
+      final older = turnsFromMaps(parsed);
+      // Ids from a second parse would repeat the first one's.
+      final stamp = _olderTurns[path] ?? 0;
+      final renamed = [
+        for (var i = 0; i < older.length; i++)
+          Turn(id: 'o$stamp.$i', userText: older[i].userText)
+            ..steps.addAll(older[i].steps)
+            ..earlierSteps = older[i].earlierSteps
+            ..trimSteps(_maxStepsPerTurn)
+      ];
+      adapter.turns.insertAll(0, renamed);
+      _olderTurns[path] = stamp + renamed.length;
+      _windowStart[path] = start == null ? 0 : int.parse(start.group(1)!);
+      _publish();
+    } catch (_) {
+      // Nothing lost: the history is still on the host for the next try.
+    } finally {
+      loadingOlder = false;
+      notifyListeners();
+    }
+  }
 
   /// Incremented on every bind. The previous tail's stream can outlive its
   /// session, so records are taken only from the current bind — a re-bind to
@@ -1003,13 +1081,23 @@ for line in wanted:
         final endOffset = header.startsWith('SZ ')
             ? int.tryParse(header.substring(3).trim())
             : null;
+        // Then where the window begins, which is where reading further back
+        // would stop.
+        final second = raw.indexOf(10, newline + 1);
+        final startLine = second < 0
+            ? ''
+            : utf8.decode(raw.sublist(newline + 1, second), allowMalformed: true);
+        final windowStart = startLine.startsWith('ST ')
+            ? int.tryParse(startLine.substring(3).trim())
+            : null;
         if (endOffset == null) {
           if (_retryBind(epoch, silent, attempt)) return;
           transcriptDiagnostic = 'Could not measure:\n$path\n$header';
           _finishLoading(epoch);
           return;
         }
-        final bytes = raw.sublist(newline + 1);
+        final bytes =
+            raw.sublist(windowStart != null ? second + 1 : newline + 1);
         final history = utf8.decode(bytes, allowMalformed: true);
         _rememberAnchor(path, bytes);
         // Off the UI thread: framing and decoding megabytes of JSON here
@@ -1036,9 +1124,11 @@ for line in wanted:
           // A silent re-bind reads a window, not the whole file, so it is
           // merged with the thread already on screen rather than replacing
           // it and dropping the older turns.
-          adapter.turns.addAll(silent
+          adapter.turns.addAll(_trimHistory(silent
               ? _mergeHistory(_cachedTurns[path] ?? const [], historyTurns)
-              : historyTurns);
+              : historyTurns));
+          _windowStart[path] = windowStart ?? 0;
+          _olderTurns[path] = 0;
           // Without this the first live turn reuses the first history turn's
           // id, which is a loaded gun for anything that keys by it.
           adapter.seed(adapter.turns.length);
@@ -1236,6 +1326,96 @@ for base, _, names in os.walk(root):
             best[pane] = (stamp, path)
 for pane, (_, path) in best.items():
     sys.stdout.write('%s %s\n' % (pane, path))''';
+
+  static const _followPython = r'''import json, os, sys, time
+# Follows a transcript from a byte position, as `tail -c +FROM -F` would, but
+# sends a line too big for a phone link trimmed: pictures reduced to their
+# size, long text cut, and the line's place in the file stamped on it.
+# After each batch it reports how far into the file it has read.
+path, start = sys.argv[2], max(0, int(sys.argv[3]) - 1)
+LIMIT = 16 * 1024
+PICTURE = (b'base64', b'data:image', b'mimeType', b'"image"')
+# What the phone never reads and Claude Code writes on every record.
+UNREAD = {'input_transformations', 'toolUseResult', 'wireToolInputs'}
+UNREAD_MARKS = tuple(b'"%s"' % k.encode() for k in UNREAD)
+TEXT = 8192
+out = sys.stdout.buffer
+parent = os.getppid()
+
+
+def shrink(value, depth=0):
+    if depth > 14:
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= TEXT else value[:TEXT] + '…'
+    if isinstance(value, list):
+        return [shrink(v, depth + 1) for v in value]
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            if key in UNREAD:
+                continue
+            if key in ('data', 'base64_data') and isinstance(item, str) and len(item) > 256:
+                kept[key] = ''
+                kept['__bytes'] = (len(item) * 3) // 4
+            elif key in ('image_url', 'url') and isinstance(item, str) and item.startswith('data:'):
+                head, _, body = item.partition(',')
+                kept[key] = head + ','
+                kept['__bytes'] = (len(body) * 3) // 4
+            elif key == 'encrypted_content' and isinstance(item, str):
+                kept[key] = ''
+            else:
+                kept[key] = shrink(item, depth + 1)
+        return kept
+    return value
+
+
+position = start
+pending = b''
+handle = None
+while os.getppid() == parent:
+    if handle is None:
+        try:
+            handle = open(path, 'rb')
+            handle.seek(position)
+        except OSError:
+            time.sleep(0.5)
+            continue
+    chunk = handle.read(1 << 20)
+    if not chunk:
+        time.sleep(0.3)
+        continue
+    pending += chunk
+    wrote = False
+    while True:
+        cut = pending.find(b'\n')
+        if cut < 0:
+            break
+        line, pending = pending[:cut], pending[cut + 1:]
+        at = position
+        position += len(line) + 1
+        # A picture is fetched by where its line sits in the file, which the
+        # phone cannot count from a stream that is no longer the file; any
+        # line with one is stamped, however small.
+        picture = any(mark in line for mark in PICTURE)
+        unread = any(mark in line for mark in UNREAD_MARKS)
+        if len(line) <= LIMIT and not picture and not unread:
+            out.write(line + b'\n')
+        else:
+            try:
+                record = shrink(json.loads(line))
+            except ValueError:
+                continue
+            if isinstance(record, dict):
+                record['__abs'] = at
+                out.write(json.dumps(record).encode() + b'\n')
+        wrote = True
+    if wrote:
+        out.write(json.dumps({'__at': position}).encode() + b'\n')
+        try:
+            out.flush()
+        except BrokenPipeError:
+            break''';
 
   /// OpenCode keeps a session as rows in SQLite rather than in a file. This
   /// mirrors each finished part into an append-only JSONL file, once, in
@@ -1462,14 +1642,15 @@ main()''';
   static const _windowPython = r'''import json, os, sys
 path, window, wanted = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 size = os.path.getsize(path)
-sys.stdout.write('SZ %d\n' % size)
+# Reading back through history: stop where what the phone holds begins.
+end = min(int(sys.argv[4]), size) if len(sys.argv) > 4 else size
 cap = 64 << 20
 
 
 def records(start):
     with open(path, 'rb') as handle:
         handle.seek(start)
-        data = handle.read()
+        data = handle.read(end - start)
     offset = start
     out = []
     first = True
@@ -1534,10 +1715,10 @@ def conversation(found):
 # 180KB of base64 inside a single record, and a dozen of them fill a two
 # megabyte read. Widen here, where the file is, rather than pulling more of
 # it across the network — then drop the payloads and send what is left.
-found = records(max(0, size - window))
-while conversation(found) < wanted and window < cap and window < size:
+found = records(max(0, end - window))
+while conversation(found) < wanted and window < cap and window < end:
     window *= 4
-    found = records(max(0, size - window))
+    found = records(max(0, end - window))
 
 # Widening quadruples, so it overshoots: trim back to the last `wanted`
 # conversation turns rather than sending everything it had to read to find
@@ -1553,6 +1734,11 @@ for index in range(len(found) - 1, -1, -1):
 
 LIMIT = 4000
 THUMBS = 14
+# Fields the phone never reads that dwarf the ones it does: Claude Code
+# writes its input transformations and a second copy of every tool's output
+# into each record — most of a window's bytes, and every byte of it
+# decrypted on the phone.
+UNREAD = {'input_transformations', 'toolUseResult', 'wireToolInputs'}
 pending = []
 
 
@@ -1573,6 +1759,8 @@ def shrink(value, depth=0):
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
+            if k in UNREAD:
+                continue
             if k in ('image_url', 'url') and isinstance(v, str) \
                     and v.startswith('data:'):
                 # Codex's pictures ride in a data: URL. Same reasoning as
@@ -1610,6 +1798,10 @@ for slot, payload in pending[-THUMBS:]:
     if small:
         slot['__thumb'] = small
 
+# The size, then where in the file the first record sent begins: the place a
+# read further back stops.
+sys.stdout.write('SZ %d\n' % size)
+sys.stdout.write('ST %d\n' % (found[cut][0] if found[cut:] else end))
 for record in prepared:
     sys.stdout.write(json.dumps(record) + '\n')''';
 
@@ -1971,8 +2163,12 @@ if found:
     // follow brings its own copier; it stops when this shell does.
     final opencode = RegExp(r'/\.shepherd/opencode/(ses_[A-Za-z0-9]+)\.jsonl$')
         .firstMatch(path)?.group(1);
-    // By name, not by descriptor: the file may not exist yet.
-    final tail = 'tail -c +$from -F ${_shellQuote(path)} 2>/dev/null';
+    // A host-side follower rather than `tail`: a picture is a megabyte of
+    // base64 on one line, and the phone gets it trimmed to what it shows.
+    final tail = 'python3 - shepherd-follow ${_shellQuote(path)} $from '
+        '<<\'SHEPHERD_FOLLOW\'\n'
+        '$_followPython\n'
+        'SHEPHERD_FOLLOW';
     final command = opencode == null
         ? tail
         : 'python3 - follow $opencode >/dev/null 2>&1 '
@@ -1982,11 +2178,9 @@ if found:
             '$tail';
     // The pattern has to match the process as ps sees it — the command after
     // the shell ate the quotes, not the string we sent — and pkill reads it
-    // as a regex, so the `+` in the offset has to be escaped or it quantifies
-    // the space before it and matches nothing.
-    // Match the file, not the offset: a re-bind can start from the same
-    // offset.
-    final pattern = 'tail -c \\+[0-9]* -F ${_regexEscape(path)}';
+    // as a regex. Match the file, not the offset: a re-bind can start from
+    // the same offset.
+    final pattern = 'shepherd-follow ${_regexEscape(path)} ';
     final previous = _tailPattern;
     if (previous != null) {
       unawaited(HerdrClient.run(ssh, 'pkill -f ${_shellQuote(previous)} 2>/dev/null || true')
@@ -2010,22 +2204,28 @@ if found:
     session.stdout.cast<List<int>>().listen((bytes) {
       final adapter = _adapter;
       if (adapter == null || epoch != _bindEpoch) return;
-      // Count bytes, not characters: this offset is what lets the next visit
-      // ask only for what arrived since.
-      _consumed[path] = (_consumed[path] ?? 0) + bytes.length;
       _rememberAnchor(path, bytes);
       var changed = false;
       final buffered = carry.isEmpty ? bytes : [...carry, ...bytes];
       final whole = _completeUtf8(buffered);
       carry = buffered.sublist(whole);
       for (final record in framer.add(decoder.convert(buffered, 0, whole))) {
+        // The follower says how far into the file it has read: what lets
+        // the next visit ask only for what arrived since.
+        final at = record['__at'];
+        if (at is num) {
+          _consumed[path] = at.toInt();
+          continue;
+        }
         if (adapter.addRecord(record)) changed = true;
       }
       if (changed) {
         // Hold no more turns than the isolate path keeps.
-        if (adapter.turns.length > _maxLiveTurns) {
-          adapter.turns.removeRange(0, adapter.turns.length - _maxLiveTurns);
+        final hold = _maxLiveTurns + (_olderTurns[path] ?? 0);
+        if (adapter.turns.length > hold) {
+          adapter.turns.removeRange(0, adapter.turns.length - hold);
         }
+        adapter.turns.last.trimSteps(_maxStepsPerTurn);
         _publish();
         _cachedTurns[path] = List<Turn>.unmodifiable(adapter.turns);
         _rememberForNextLaunch(path);

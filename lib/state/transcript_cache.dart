@@ -26,7 +26,7 @@ class TranscriptCache {
   /// Enough panes to cover a day's work without turning the cache into a
   /// second copy of every transcript on the host.
   static const _maxPanes = 8;
-  static const _maxTurns = 40;
+  static const _maxTurns = 10;
 
   final Map<String, CachedTranscript> _entries = {};
 

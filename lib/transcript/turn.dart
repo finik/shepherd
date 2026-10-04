@@ -189,6 +189,23 @@ class Turn {
   /// Everything the agent emitted, in the order it emitted it.
   final List<TurnStep> steps = [];
 
+  /// Thinking and tool steps let go from the start of a long turn.
+  int earlierSteps = 0;
+
+  /// Keep the last [max] thinking and tool steps, and every reply, picture
+  /// and failure: what the agent said stays, how it got there is trimmed.
+  void trimSteps(int max) {
+    var work = steps.where((s) => s is Reasoning || s is ToolCall).length;
+    if (work <= max) return;
+    var drop = work - max;
+    earlierSteps += drop;
+    steps.removeWhere((s) {
+      if (drop == 0 || !(s is Reasoning || s is ToolCall)) return false;
+      drop--;
+      return true;
+    });
+  }
+
   Turn({required this.id, required this.userText, this.pending = false});
 
   Iterable<String> get assistantTexts =>
@@ -272,3 +289,10 @@ String attachmentName(String remotePath) {
   final name = dash < 0 ? base : base.substring(dash + 1);
   return name.isEmpty ? 'attachment' : name;
 }
+
+/// How full the agent's context was at its latest model call.
+///
+/// Every call sends the whole conversation, and the agent records how many
+/// input tokens that request carried — so the latest one is the context in
+/// use, not a running total. A compaction shows up by itself: the next call
+/// is small.

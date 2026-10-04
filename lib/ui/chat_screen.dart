@@ -115,8 +115,10 @@ class _ChatScreenState extends State<ChatScreen> {
     // A thumbnail fetched after the thread was drawn changes what is on
     // screen without changing a single turn.
     final pictures = 'p${state.thumbsArrived}';
+    // Earlier history being fetched, or none left to fetch.
+    final older = 'o${state.loadingOlder ? 1 : 0}${state.hasOlder ? 1 : 0}';
     final turns = state.turns;
-    if (turns.isEmpty) return '0$sending$pictures';
+    if (turns.isEmpty) return '0$sending$pictures$older';
     final last = turns.last;
     final step = last.steps.isEmpty ? null : last.steps.last;
     final tail = switch (step) {
@@ -128,7 +130,7 @@ class _ChatScreenState extends State<ChatScreen> {
       null => '-',
     };
     return '${turns.length}.${last.userText.length}.${last.steps.length}'
-        '.$tail$sending$pictures';
+        '.$tail$sending$pictures$older';
   }
 
   @override
@@ -384,9 +386,39 @@ class _ChatScreenState extends State<ChatScreen> {
         controller: _scroll,
         reverse: true,
         padding: const EdgeInsets.only(top: 16, bottom: 4),
-        itemCount: turns.length,
-        itemBuilder: (context, i) => _turn(d, turns[turns.length - 1 - i], pad),
+        itemCount: turns.length + 1,
+        itemBuilder: (context, i) => i == turns.length
+            ? _older(d, pad)
+            : _turn(d, turns[turns.length - 1 - i], pad),
       );
+  /// The top of the thread. The phone holds only the recent end of a
+  /// conversation; reaching the top asks the host for what came before.
+  Widget _older(D d, double pad) {
+    final state = widget.state;
+    if (!state.hasOlder && !state.loadingOlder) {
+      return const SizedBox(height: 8);
+    }
+    if (!state.loadingOlder) {
+      // Built only once scrolled into view: that is the request.
+      WidgetsBinding.instance.addPostFrameCallback((_) => state.loadOlder());
+    }
+    return Padding(
+      key: const ValueKey('older'),
+      padding: EdgeInsets.symmetric(horizontal: pad, vertical: 18),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2, color: d.ink3),
+          ),
+          const SizedBox(width: 10),
+          Text('LOADING EARLIER', style: d.label.copyWith(color: d.ink3)),
+        ],
+      ),
+    );
+  }
 
   /// User turn is a full-bleed band; the agent reply is unadorned prose at
   /// full measure. Fill and weight are the two channels that separate them —
