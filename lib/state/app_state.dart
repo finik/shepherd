@@ -180,6 +180,7 @@ class AppState extends ChangeNotifier {
   Future<void> refreshCost() {
     final path = _boundPath, agent = selectedPane?.agent, ssh = _ssh;
     if (path == null || agent == null || ssh == null) return Future.value();
+    unawaited(_checkPlans());
     final known = _costs[path];
     if (known != null &&
         DateTime.now().difference(known.at) < const Duration(seconds: 30)) {
@@ -205,6 +206,267 @@ class AppState extends ChangeNotifier {
         notifyListeners();
       }
     }();
+  }
+
+  /// Whether the host has anything that reads subscriptions: the
+  /// herdr-agent-usage plugin or CodexBar. Asked once per connection.
+  bool get hasPlans => _hasPlans == true || planList != null;
+  bool? _hasPlans;
+  bool _checkingPlans = false;
+
+  Future<void> _checkPlans() async {
+    final ssh = _ssh;
+    if (ssh == null || _hasPlans != null || _checkingPlans) return;
+    _checkingPlans = true;
+    try {
+      final out = await _runPlans(ssh, 'check');
+      _hasPlans = out == true;
+      notifyListeners();
+    } catch (_) {
+      // Unknown; asked again next time.
+    } finally {
+      _checkingPlans = false;
+    }
+  }
+
+  Future<Object?> _runPlans(SSHClient ssh, [String mode = '']) async {
+    final out = await HerdrClient.run(
+      ssh,
+      'python3 - $mode <<\'SHEPHERD_PLANS\'\n$_plansPython\nSHEPHERD_PLANS',
+      timeout: const Duration(seconds: 60),
+    );
+    final line = utf8
+        .decode(out, allowMalformed: true)
+        .split('\n')
+        .lastWhere((l) => l.startsWith('@@@'), orElse: () => '');
+    return line.isEmpty ? null : jsonDecode(line.substring(3));
+  }
+
+  /// What is left of each subscription; null when it could not be asked.
+  /// A reading under a minute old stands.
+  Future<List<PlanUsage>?> plans() {
+    final at = _plansAt;
+    if (_plans != null &&
+        at != null &&
+        DateTime.now().difference(at) < const Duration(minutes: 1)) {
+      return _plans!;
+    }
+    _plansAt = DateTime.now();
+    return _plans = _fetchPlans().then((found) {
+      // A failed ask is not kept; the next look asks again.
+      if (found == null) {
+        _plans = null;
+      } else {
+        planList = found;
+        notifyListeners();
+      }
+      return found;
+    });
+  }
+
+  /// The latest subscriptions read, for drawing without waiting, and the
+  /// machine they were read on.
+  List<PlanUsage>? planList;
+  String? _plansMachine;
+
+  /// The provider each pane was last matched to: while a chat reloads its
+  /// model is not known, and the bars should not blink out for it.
+  final Map<String, String> _planProvider = {};
+
+  /// Read the subscriptions again if the last reading is a minute old, after
+  /// first finding out whether the host can read them at all.
+  Future<void> refreshPlans() async {
+    if (_hasPlans == null) await _checkPlans();
+    if (hasPlans) await plans();
+  }
+
+  /// The subscription [pane] is drawing on, as the subscriptions name
+  /// providers: told by its model where the agent runs others' models.
+  PlanUsage? planFor(Pane? pane) {
+    final list = planList;
+    if (pane == null || list == null) return null;
+    final model = (pane.paneId == selectedPaneId ? _usage?.model : null) ?? '';
+    final ids = <String>[
+      if (model.contains('claude')) 'claude',
+      if (model.startsWith('gpt') || model.contains('codex')) 'codex',
+      if (model.contains('grok')) ...['grok', 'xai'],
+      if (model.startsWith('muse')) 'muse',
+      if (pane.agent case final agent?) agent,
+    ];
+    if (model.isEmpty) {
+      if (_planProvider[pane.paneId] case final known?) ids.insert(0, known);
+    }
+    for (final id in ids) {
+      for (final p in list) {
+        if (p.provider == id && p.windows.isNotEmpty) {
+          if (model.isNotEmpty) _planProvider[pane.paneId] = id;
+          return p;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<List<PlanUsage>?>? _plans;
+  DateTime? _plansAt;
+
+  Future<List<PlanUsage>?> _fetchPlans() async {
+    final ssh = _ssh;
+    if (ssh == null) return null;
+    try {
+      final found = await _runPlans(ssh);
+      return found is List ? PlanUsage.fromList(found) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _plansPython = r'''import glob, json, os, shutil, subprocess, sys, time
+# What is left of each subscription, from whichever readers the host has:
+# the herdr-agent-usage plugin's saved snapshots, then CodexBar for any
+# provider the plugin has nothing for. Either may be missing; with neither,
+# the list is empty. `check` only says whether there is anything to ask.
+home = os.path.expanduser('~')
+
+
+def plugin_dirs():
+    state = os.environ.get('XDG_STATE_HOME') or os.path.join(home, '.local/state')
+    return [os.path.join(state, 'herdr/plugins/herdr-agent-usage'),
+            os.path.join(home, 'Library/Application Support/dev.herdr.herdr-agent-usage'),
+            os.path.join(home, '.local/share/herdr-agent-usage')]
+
+
+def codexbar_path():
+    return shutil.which('codexbar', path=os.pathsep.join([
+        os.environ.get('PATH', ''), '/opt/homebrew/bin', '/usr/local/bin',
+        '/home/linuxbrew/.linuxbrew/bin', os.path.join(home, '.local/bin'),
+        '/Applications/CodexBar.app/Contents/Helpers']))
+
+
+def snapshots():
+    for folder in plugin_dirs():
+        for path in glob.glob(os.path.join(folder, '*.json')):
+            try:
+                with open(path) as handle:
+                    data = json.load(handle)
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            snap = data.get('snapshot', data)
+            if isinstance(snap, dict) and isinstance(snap.get('windows'), list) \
+                    and snap.get('provider'):
+                yield snap
+
+
+if sys.argv[1:] == ['check']:
+    print('@@@' + json.dumps(bool(codexbar_path() or any(True for _ in snapshots()))))
+    sys.exit()
+
+# The plugin's windows by length; the length is what the phone names them by.
+KINDS = {'five_hour': 300, 'weekly': 10080, 'monthly': 43200, 'daily': 1440}
+
+
+def iso(unix):
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(unix)) if unix else None
+
+
+# Each window by itself: the plugin writes a provider's quota from whichever
+# session spoke last, and one session may report the week but not the five
+# hours. The newest reading of each window stands.
+plans = {}
+for snap in snapshots():
+    provider = snap['provider']
+    at = snap.get('fetched_at_unix') or 0
+    plan = plans.setdefault(provider, {'provider': provider, 'plan': '',
+                                       'windows': {}, '_at': 0})
+    for w in snap['windows']:
+        if not isinstance(w, dict) or not isinstance(w.get('used_percent'), (int, float)):
+            continue
+        minutes = w['duration_seconds'] // 60 if w.get('duration_seconds') \
+            else KINDS.get(w.get('kind'))
+        key = minutes or w.get('source_label') or w.get('kind')
+        if key in plan['windows'] and plan['windows'][key][0] >= at:
+            continue
+        reset = w.get('resets_at')
+        if isinstance(reset, dict):
+            reset = reset.get('unix') or reset.get('at')
+        plan['windows'][key] = (at, {
+            'label': w.get('source_label'), 'usedPercent': w['used_percent'],
+            'minutes': minutes,
+            'resetsAt': iso(reset) if isinstance(reset, (int, float)) else reset})
+        plan['_at'] = max(plan['_at'], at)
+for provider in list(plans):
+    plan = plans[provider]
+    if not plan['windows']:
+        del plans[provider]
+        continue
+    plan['at'] = iso(plan['_at'])
+
+codexbar = codexbar_path()
+if codexbar:
+    try:
+        out = subprocess.run([codexbar, 'usage', '--json-only', '--no-color'],
+                             capture_output=True, text=True, timeout=50).stdout
+        entries = json.loads(out[out.index('['):])
+    except Exception:
+        entries = []
+    for e in entries:
+        provider = e.get('provider') if isinstance(e, dict) else None
+        if not provider or provider == 'cli':
+            continue
+        usage = e.get('usage')
+        if provider in plans:
+            # The plugin's readings stand; CodexBar knows the plan's name and
+            # gives any window the plugin has not seen.
+            if isinstance(usage, dict):
+                if usage.get('loginMethod'):
+                    plans[provider]['plan'] = usage['loginMethod']
+                pace = e.get('pace') or {}
+                for key in ('primary', 'secondary', 'tertiary'):
+                    w = usage.get(key)
+                    if isinstance(w, dict) and isinstance(w.get('usedPercent'), (int, float)) \
+                            and w.get('windowMinutes') not in plans[provider]['windows']:
+                        plans[provider]['windows'][w.get('windowMinutes') or key] = (0, {
+                            'label': None, 'usedPercent': w['usedPercent'],
+                            'minutes': w.get('windowMinutes'), 'resetsAt': w.get('resetsAt'),
+                            'pace': (pace.get(key) or {}).get('summary')})
+            continue
+        if not isinstance(usage, dict):
+            error = e.get('error')
+            plans[provider] = {'provider': provider, 'plan': '', 'windows': [],
+                               'error': (error or {}).get('message') if isinstance(error, dict) else None}
+            continue
+        labels = e.get('rateWindowLabels') or {}
+        pace = e.get('pace') or {}
+        windows = []
+        for key in ('primary', 'secondary', 'tertiary'):
+            w = usage.get(key)
+            if isinstance(w, dict) and isinstance(w.get('usedPercent'), (int, float)):
+                windows.append({'label': labels.get(key), 'usedPercent': w['usedPercent'],
+                                'minutes': w.get('windowMinutes'), 'resetsAt': w.get('resetsAt'),
+                                'pace': (pace.get(key) or {}).get('summary')})
+        plans[provider] = {'provider': provider, 'plan': usage.get('loginMethod') or '',
+                           'windows': windows, 'at': usage.get('updatedAt')}
+
+for p in plans.values():
+    p.pop('_at', None)
+    if isinstance(p['windows'], dict):
+        # Shortest window first: the five hours, then the week.
+        p['windows'] = [w for _, w in sorted(
+            p['windows'].values(),
+            key=lambda pair: pair[1].get('minutes') or 1 << 30)]
+print('@@@' + json.dumps(list(plans.values())))''';
+
+  @visibleForTesting
+  static String get plansScript => _plansPython;
+
+  @visibleForTesting
+  void setPlansForTest(List<PlanUsage> plans) {
+    _hasPlans = true;
+    planList = plans;
+    _plans = Future.value(plans);
+    _plansAt = DateTime.now();
   }
 
   @visibleForTesting
@@ -563,14 +825,25 @@ class AppState extends ChangeNotifier {
 
       host = await _rpc!.snapshot();
       if (generation != _connectGeneration) return;
-      // Another host, or the same one after a while: its agents may differ.
+      // Another host, or the same one after a while: its agents and what
+      // reads its subscriptions may differ, so both are asked again. The
+      // last subscriptions read stay on screen meanwhile, unless they were
+      // another machine's.
       _models.clear();
+      _hasPlans = null;
+      _plans = null;
+      if (_plansMachine != machine.id) {
+        planList = null;
+        _planProvider.clear();
+      }
+      _plansMachine = machine.id;
       _startPolling();
       selectedPaneId ??= host.focusedPaneId;
       conn = ConnState.connected;
       notifyListeners();
       unawaited(_refreshBlockedPrompts());
       unawaited(checkForUpdate());
+      if (_chatVisible) unawaited(refreshPlans());
       // Hand the host somewhere to push to. Doing it on every connect keeps
       // the file current through token rotation, which happens on its own
       // schedule and without telling anyone.
@@ -4405,6 +4678,78 @@ class SessionCost {
                 : '\$${usd.round()}';
     return '${estimated ? '≈ ' : ''}$amount${unpriced.isEmpty ? '' : '+'}';
   }
+}
+
+/// One subscription as the host reads it: whose, which plan, and how much
+/// of each of its limits is used; or why it could not be read.
+class PlanUsage {
+  final String provider;
+  final String plan;
+  final List<PlanWindow> windows;
+  final String? error;
+
+  const PlanUsage(
+      {required this.provider,
+      this.plan = '',
+      this.windows = const [],
+      this.error})
+      : _at = null;
+
+  const PlanUsage._(
+      {required this.provider,
+      required this.plan,
+      required this.windows,
+      this.error,
+      DateTime? at})
+      : _at = at;
+
+  /// When this reading was taken, when the reader says.
+  DateTime? get at => _at;
+  final DateTime? _at;
+
+  /// The host script's answer: one entry per provider, already in one shape
+  /// whichever reader it came from.
+  static List<PlanUsage> fromList(List found) => [
+        for (final p in found.whereType<Map>())
+          if (p['provider'] is String)
+            PlanUsage._(
+              provider: p['provider'] as String,
+              plan: (p['plan'] as String?) ?? '',
+              error: p['error'] as String?,
+              at: DateTime.tryParse('${p['at'] ?? ''}'),
+              windows: [
+                for (final w in (p['windows'] as List? ?? const [])
+                    .whereType<Map>())
+                  if (w['usedPercent'] is num)
+                    PlanWindow(
+                      label: w['label'] as String?,
+                      usedPercent: (w['usedPercent'] as num).toDouble(),
+                      minutes: (w['minutes'] as num?)?.toInt(),
+                      resetsAt: DateTime.tryParse('${w['resetsAt'] ?? ''}'),
+                      pace: w['pace'] as String?,
+                    ),
+              ],
+            ),
+      ];
+}
+
+/// One limit of a plan: a session, a week, a month.
+class PlanWindow {
+  final String? label;
+  final double usedPercent;
+  final int? minutes;
+  final DateTime? resetsAt;
+
+  /// CodexBar's reading of the rate you are going at, e.g. "Runs out in
+  /// 22h 31m".
+  final String? pace;
+
+  const PlanWindow(
+      {this.label,
+      required this.usedPercent,
+      this.minutes,
+      this.resetsAt,
+      this.pace});
 }
 
 /// A model an agent can run on: the id its flag and command take, and what

@@ -16,6 +16,7 @@ import 'agent_glyph.dart';
 import 'blocked_prompt.dart';
 import 'context_pie.dart';
 import 'model_dialog.dart';
+import 'quotas_screen.dart';
 import '../transcript/turn.dart';
 import 'design.dart';
 import 'turn_detail_screen.dart';
@@ -40,13 +41,20 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.state.addListener(_onState);
     widget.state.chatVisible = true;
     _scroll.addListener(_onScroll);
+    // The bars in the header are kept a few minutes fresh while the chat is
+    // open; each look costs the host a script run.
+    unawaited(widget.state.refreshPlans());
+    _plansTimer = Timer.periodic(const Duration(minutes: 3),
+        (_) => unawaited(widget.state.refreshPlans()));
   }
 
+  Timer? _plansTimer;
 
   @override
   void dispose() {
     widget.state.removeListener(_onState);
     widget.state.chatVisible = false;
+    _plansTimer?.cancel();
     _composer.dispose();
     _scroll.dispose();
     super.dispose();
@@ -121,7 +129,8 @@ class _ChatScreenState extends State<ChatScreen> {
     // Earlier history being fetched, or none left to fetch.
     final older = 'o${state.loadingOlder ? 1 : 0}${state.hasOlder ? 1 : 0}'
         'c${((state.contextFraction ?? -1) * 100).round()}'
-        'm${_modelLine(state)}';
+        'm${_modelLine(state)}'
+        'q${[for (final w in state.planFor(state.selectedPane)?.windows ?? const <PlanWindow>[]) '${w.usedPercent.round()}${w.resetsAt?.hour}'].join(',')}';
     final turns = state.turns;
     if (turns.isEmpty) return '0$sending$pictures$older';
     final last = turns.last;
@@ -229,6 +238,16 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: Padding(
                           padding: const EdgeInsets.fromLTRB(12, 12, 4, 8),
                           child: ContextPie(fraction: fraction, size: 20),
+                        ),
+                      ),
+                    if (state.planFor(pane) case final plan?)
+                      GestureDetector(
+                        key: const ValueKey('quota-bars'),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _openQuotas,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(6, 10, 0, 6),
+                          child: QuotaBars(plan: plan),
                         ),
                       ),
                     // Its own target rather than a spot inside the back one.
@@ -382,9 +401,30 @@ class _ChatScreenState extends State<ChatScreen> {
     return effort == null || effort.isEmpty ? model : '$model · $effort';
   }
 
-  /// The session's cost.
-  Widget _cost(D d, AppState state, {Key? key, required TextStyle style}) =>
-      Text(_costLine(state) ?? '', key: key, style: style);
+  void _openQuotas() => Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => QuotasScreen(state: widget.state)));
+
+  /// The session's cost; when the host can read subscriptions, a way to
+  /// what is left of each.
+  Widget _cost(D d, AppState state, {Key? key, required TextStyle style}) {
+    final text = _costLine(state) ?? '';
+    if (!state.hasPlans) {
+      return Text(text, key: key, style: style);
+    }
+    return GestureDetector(
+      key: const ValueKey('cost-plans'),
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        Navigator.of(context).pop();
+        _openQuotas();
+      },
+      child: Text(text,
+          key: key,
+          style: style.copyWith(
+              decoration: TextDecoration.underline,
+              decorationStyle: TextDecorationStyle.dotted)),
+    );
+  }
 
   /// "≈ $750 at API rates" — what the session has cost so far.
   static String? _costLine(AppState state) {

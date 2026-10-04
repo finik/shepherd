@@ -1,0 +1,89 @@
+[
+ {
+  "usage": {
+   "identity": {
+    "accountEmail": "user@example.com",
+    "providerID": "codex",
+    "loginMethod": "free"
+   },
+   "primary": {
+    "resetsAt": "2026-10-22T22:36:30Z",
+    "usedPercent": 33,
+    "windowMinutes": 43200,
+    "resetDescription": "Oct 22 at 3:36\u202fPM"
+   },
+   "tertiary": null,
+   "loginMethod": "free",
+   "updatedAt": "2026-09-30T05:40:49Z",
+   "secondary": null,
+   "codexResetCredits": {
+    "credits": [],
+    "availableCount": 0,
+    "updatedAt": "2026-09-30T05:40:49Z"
+   },
+   "dataConfidence": "exact",
+   "accountEmail": "user@example.com"
+  },
+  "provider": "codex",
+  "source": "oauth",
+  "rateWindowLabels": {
+   "primary": "Session"
+  },
+  "version": "0.156.0"
+ },
+ {
+  "usage": {
+   "identity": {
+    "providerID": "claude",
+    "loginMethod": "Claude Max 5x"
+   },
+   "loginMethod": "Claude Max 5x",
+   "secondary": {
+    "resetsAt": "2026-10-03T16:59:59Z",
+    "usedPercent": 79,
+    "windowMinutes": 10080,
+    "resetDescription": "Oct 3 at 9:59AM"
+   },
+   "updatedAt": "2026-09-30T05:40:49Z",
+   "primary": {
+    "resetsAt": "2026-09-30T07:49:59Z",
+    "usedPercent": 39,
+    "windowMinutes": 300,
+    "resetDescription": "Sep 30 at 12:49AM"
+   },
+   "tertiary": null
+  },
+  "provider": "claude",
+  "source": "oauth",
+  "rateWindowLabels": {
+   "secondary": "Weekly",
+   "primary": "Session"
+  },
+  "pace": {
+   "secondary": {
+    "etaSeconds": 81036,
+    "stage": "farAhead",
+    "summary": "29% in deficit | Expected 50% used | Runs out in 22h 31m",
+    "willLastToReset": false,
+    "deltaPercent": 29,
+    "expectedUsedPercent": 50
+   },
+   "primary": {
+    "stage": "farBehind",
+    "summary": "18% in reserve | Expected 57% used | Lasts until reset",
+    "willLastToReset": true,
+    "deltaPercent": -18,
+    "expectedUsedPercent": 57
+   }
+  }
+ },
+ {
+  "source": "auto",
+  "provider": "xai",
+  "error": {
+   "message": "No available fetch strategy for xai.",
+   "kind": "provider",
+   "code": 1
+  }
+ }
+]
