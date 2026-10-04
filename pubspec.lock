@@ -57,6 +57,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.2"
+  bugsee_flutter:
+    dependency: "direct main"
+    description:
+      name: bugsee_flutter
+      sha256: c2cc1c1fb7d5a875fadfa3bbcc643b4261f67a2f9923ace36a5f200e88dbd779
+      url: "https://pub.dev"
+    source: hosted
+    version: "9.0.4"
   characters:
     dependency: transitive
     description:

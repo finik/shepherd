@@ -8,7 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 build=$(grep '^version:' pubspec.yaml | sed 's/.*+//')
-flutter build apk --release
+# Secrets stay out of the repository: secrets.json is gitignored.
+defines=()
+[ -f secrets.json ] && defines=(--dart-define-from-file=secrets.json)
+flutter build apk --release "${defines[@]}"
 
 mkdir -p ~/.shepherd
 cp build/app/outputs/flutter-apk/app-release.apk ~/.shepherd/shepherd.apk

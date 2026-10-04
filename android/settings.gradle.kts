@@ -25,3 +25,12 @@ plugins {
 }
 
 include(":app")
+
+// Bugsee's plugin asks for JCenter, which Gradle 9 does not have; what it
+// fetches from there is on Maven Central.
+gradle.allprojects {
+    listOf(buildscript.repositories, repositories).forEach { repos ->
+        (repos as ExtensionAware).extra["jcenter"] =
+            KotlinClosure0({ repos.mavenCentral() })
+    }
+}

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:bugsee_flutter/bugsee_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -17,7 +18,25 @@ ThemeMode _parseThemeMode(String mode) => switch (mode) {
       _ => ThemeMode.system,
     };
 
-void main() {
+/// Bugsee's app token, given at build time; a build without one runs
+/// without Bugsee.
+const _bugseeToken = String.fromEnvironment('BUGSEE_TOKEN');
+
+Future<void> main() async {
+  if (_bugseeToken.isEmpty) {
+    _run();
+    return;
+  }
+  await Bugsee.launch(
+    _bugseeToken,
+    appRunCallback: (_) => _run(),
+    // No permanent "report a bug" notification: the app keeps one of its
+    // own up while it watches the host, and two is clutter.
+    launchOptions: AndroidLaunchOptions()..notificationBarTrigger = false,
+  );
+}
+
+void _run() {
   WidgetsFlutterBinding.ensureInitialized();
   // The background watcher talks to this isolate over a port; it has to exist
   // before the service can be started.

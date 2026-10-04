@@ -43,6 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+# Gradle's own reports, beside the build Flutter redirects elsewhere
+/android/build/
 
 # Widget Preview related
 .widget_preview/
@@ -52,3 +54,5 @@ dev_config.json
 
 # Yours to supply: ties the app to your own Firebase project for push.
 android/app/google-services.json
+# Build-time secrets, such as the Bugsee token; tool/publish.sh passes them in.
+secrets.json
