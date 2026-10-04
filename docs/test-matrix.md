@@ -22,8 +22,8 @@ herdr pane run <pane> omp
 herdr pane run <pane> muse --approval-mode untrusted --approval-judge off
 ```
 
-Pi has no question tool of its own; the example extension gives it one. It
-does not tell Herdr it is waiting, so Shepherd recognises the menu on screen.
+Pi has no question tool of its own; the example extension gives it one. Pi
+reports waiting to Herdr only with `plugin/pi-herdr-prompts` installed.
 
 Screen coordinates for `adb shell input tap` are device pixels (1080×2410 on a
 Pixel 10 Pro); screenshots are usually displayed scaled, so multiply the
@@ -89,3 +89,34 @@ real device's Doze.
 | 29 | Newer build published on the host | Offered in Settings and Machines |
 | 30 | Download | Button fills left to right; percentage and megabytes both move |
 | 31 | Download on a busy host | Slows rather than freezing; stalls fail after 30s |
+
+## Long sessions
+
+| # | Case | Expected |
+|---|------|----------|
+| 32 | Open a session hundreds of megabytes long | Last few turns within seconds; no ANR |
+| 33 | Scroll past the top | Spinner, then the turns before it; repeat until the start |
+| 34 | Agent writes pictures or megabytes of tool output | The chat keeps up; the host sends thumbnails and clipped output, not the bytes |
+
+## Agents
+
+| # | Case | Expected |
+|---|------|----------|
+| 35 | + on the sessions list | Agent and model pull-downs present at once, filled as the host answers; folders shown from `~/` |
+| 36 | Start an agent with a model chosen | A new workspace in that folder, the agent on that model |
+| 37 | Close an agent from the menu | Asks first; the pane closes on the host and leaves the list |
+| 38 | Model line under the pie → another model | The agent moves to it; its saved default is unchanged on the host |
+| 39 | Same → another effort only | The agent's effort changes; saved defaults unchanged |
+| 40 | omp or OpenCode | The model line does not open a choice |
+
+## Context, cost and subscriptions
+
+| # | Case | Expected |
+|---|------|----------|
+| 41 | Context past 80% | Pie turns red |
+| 42 | Tap the pie | Tokens used of the window, the cost, COMPACT and CLEAR; each asks first |
+| 43 | Compact, then the next reply | Pie drops to what the agent now holds |
+| 44 | Host with the herdr-agent-usage plugin or CodexBar | Two bars beside the pie for the agent's own plan, each with the time to reset; red from 80% |
+| 45 | Tap the bars, or the cost | Subscriptions screen with every plan's limits, and why any could not be read |
+| 46 | Host with neither | No bars; the cost is plain text |
+| 47 | App backgrounded and reconnected | Bars stay up while they are read again |

@@ -60,6 +60,11 @@ and it survives scrollback, resizes and reconnects. While an agent is working,
 the row and the chat show its current step: the thought it is having, or the
 tool it is running.
 
+A chat opens on its last few turns, however long the session has run: a
+transcript can be hundreds of megabytes, and the phone only needs the end of
+it. Scroll back past the top and the turns before it are fetched from the host,
+a screenful at a time, with a spinner while they come.
+
 <img src="docs/images/chat.png" width="320" alt="A conversation several turns in, each answer with its step count beneath">
 
 **The reasoning, folded away until you want it.** A turn reads as an answer,
@@ -120,6 +125,43 @@ your pocket picks it up from the Settings screen. Shepherd can be worked on
 *from* Shepherd, entirely remotely — you read the diff, answer its questions and
 approve its edits on the phone, then install what it built.
 
+**Start, switch and close agents from the phone.** The + button starts a new
+agent: pick one of the agents installed on the host, a model from the list that
+agent keeps, and a folder — one an agent already works in, or any folder under
+your home folder, shown as `~/…`. The model and effort under the chat's context
+pie open a choice of both:
+a running Claude Code, Pi, Codex or muse agent can move to another model,
+another effort, or both. The switch applies to that session and leaves the
+agent's saved defaults as they were. omp and OpenCode take their model when they
+start. The chat's menu closes an agent, after asking.
+
+**How full the context is, and what it has cost.** A pie in the chat's header
+shows how much of the model's context the latest call used, turning red at
+80%, with the model and its reasoning effort beneath. Tapping it opens the
+details, with buttons to compact or clear the context, each after asking.
+The context figure is what the agent itself recorded for its latest call, so it
+drops after a compaction without the app keeping count.
+
+The details also show what the session has cost at API rates, added up on the
+host from the whole transcript. Where the agent records the cost (Pi, omp and
+OpenCode on every reply, Claude Code from time to time) that figure is used.
+The rest is estimated by pricing the recorded tokens, from muse's own price
+list for muse and from
+[LiteLLM's public price table](https://github.com/BerriAI/litellm) for the
+others, and marked ≈. On a subscription it is what those calls would cost, not
+what you pay.
+
+**What is left of each subscription.** Two thin bars beside the pie show the
+open agent's own plan — its five-hour window over its week, each with the time
+until it resets, red from 80% like the pie. They, like the cost, open a screen
+of every limit of every plan: how much is used and when it resets. Shepherd
+reads the [herdr-agent-usage](https://github.com/levi-qiao/herdr-agent-usage)
+plugin's saved readings first, then
+[CodexBar](https://github.com/steipete/CodexBar) for any provider the plugin
+has nothing for, along with CodexBar's forecast of whether a limit will last
+until it resets. Either one is enough, and neither is required: without them
+there are no bars and the cost is only a cost.
+
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
 and dirty count for each agent's folder. More than one Herdr session on a host:
 each machine can name the one it follows (`herdr --session work`), so one phone
@@ -141,8 +183,11 @@ One SSH connection does everything. Herdr's Unix socket is forwarded over it
 (`direct-streamlocal@openssh.com`) and spoken to in newline-delimited JSON:
 `session.snapshot` for the topology, `events.subscribe` for changes,
 `pane.send_input` to type into a pane. Herdr also tells us where each pane's
-transcript file lives, and that file — tailed over the same connection — is
-where the conversation comes from. Three agents differ. Herdr reports no session
+transcript file lives, and that file is where the conversation comes from. A
+small follower on the host watches it and sends on what the phone reads,
+leaving out what it does not — a picture becomes its size and a thumbnail, a
+megabyte of tool output becomes its first few kilobytes — because every byte
+that crosses is decrypted on the phone. Three agents differ. Herdr reports no session
 for Codex or muse, so the app finds the newest one started in the pane's
 directory.
 OpenCode keeps its sessions in SQLite rather than in a file, so a helper copies
@@ -152,6 +197,9 @@ each finished part, once, into an append-only JSONL mirror under
 Nothing is installed on the host. The helper scripts that read transcripts are
 Dart string constants inside the APK, sent down the channel as heredocs on
 each call, so the code that runs is always the code the installed build carries.
+The subscription bars are the exception that proves it: they appear only when
+the host already has a reader of its own, the herdr-agent-usage plugin or
+CodexBar.
 
 Your host needs: `sshd`, Herdr 0.9+, and Python 3. Pillow or `sips` if you want
 thumbnails; without either, pictures still open on demand.
@@ -178,6 +226,16 @@ with `SHEPHERD_HOST`, `SHEPHERD_USER` and `SHEPHERD_KEY_B64` (base64 of a
 private key). Saved settings always win over these. Keep that
 file out of the repo — it holds a private key.
 
+Pi reports that it is waiting on you only with the small extension in
+[`plugin/pi-herdr-prompts/`](plugin/pi-herdr-prompts/README.md) installed; without
+it a Pi question reads as working.
+
+Bug reports go to [Bugsee](https://bugsee.com) when the build is given a
+token: put `{"BUGSEE_TOKEN": "…"}` in `secrets.json` at the top of the repo,
+which is ignored by git, and `tool/publish.sh` passes it in. A build without a
+token runs without Bugsee. With one, Bugsee records the screen, logs and network
+of the session it reports, which includes the transcripts on screen.
+
 Push notifications need your own Firebase project: drop its
 `android/app/google-services.json` in place and link the plugin in
 [`plugin/herdr-push/`](plugin/herdr-push/README.md) into Herdr. Without it,
@@ -199,9 +257,12 @@ Testing on a real phone against a real host is described in
 
 - **No terminal.** Herdr sizes panes to whatever client attaches, so a PTY on a
   phone would reshape the session on your desktop.
-- **No terminal control beyond answering.** A question with numbered choices is
-  answerable, and so is anything that takes prose. Driving a TUI — cycling
-  modes, scrolling a pager, anything that wants a specific key — is not.
+- **No terminal control beyond answering and a few commands.** A question with
+  numbered choices is answerable, and so is anything that takes prose; so are
+  compact, clear, and a change of model or effort, each sent as the agent's own
+  slash command. Driving a TUI — cycling modes, scrolling a pager, anything that
+  wants a specific key — is not. Codex's model list is the one place the app
+  reads a screen: it finds the row it wants and moves to it.
 - **Six agents read properly.** Claude Code, Pi, omp, Codex, OpenCode and muse
   are read and answered from the phone, verified against real sessions, pictures,
   questions and permission prompts included. Anything else Herdr reports is
