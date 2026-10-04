@@ -21,7 +21,7 @@ question, you get the question and its choices as buttons.
 Nothing is reproduced from the terminal. The terminal stays where it is good.
 
 <p align="center">
-  <img src="docs/images/demo.gif" width="400" alt="Four agents on one host. One is waiting on a design question; it is opened, its three answers are flipped through, OK is pressed, and the agent gets on with the change and asks for approval to edit the next file">
+  <img src="docs/images/demo.gif" width="400" alt="Four agents on one host. One is waiting on a question; it is opened, its answers are flipped through, OK is pressed, and the agent makes the change and says what it did">
 </p>
 
 Flutter, MIT. Tested on Android; the phone in the screenshots is a Pixel.
@@ -61,7 +61,7 @@ the row and the chat show its current step: the thought it is having, or the
 tool it is running. A long session opens on its last few turns, and scrolling
 back fetches the ones before.
 
-<img src="docs/images/chat.png" width="320" alt="A conversation two turns in, a table in its answer; in the header the context pie, the plan's five-hour and weekly bars, and the model and effort">
+<img src="docs/images/chat.png" width="320" alt="A conversation with a table in its answer; in the header the context pie, the plan's five-hour and weekly bars, and the model and effort">
 
 **Six agents, each read in its own format.** Claude Code, Pi, omp, Codex,
 OpenCode and muse each keep their sessions differently, and each is read as it
@@ -77,7 +77,7 @@ the tool calls in the order they happened; tap any one of them for what was sent
 and what came back.
 
 <p>
-  <img src="docs/images/steps.png" width="250" alt="The steps behind a turn: reasoning and tool calls in order">
+  <img src="docs/images/steps.png" width="250" alt="The steps behind a turn: tool calls in order, failed ones in red, with the agent's reasoning between them">
   <img src="docs/images/tool.png" width="250" alt="One tool call with its input and its result">
 </p>
 
@@ -115,7 +115,7 @@ That window is yours — always notify, or 2, 5 or 15 minutes — and "around" i
 agents' own transcripts and a heartbeat this app leaves. Nothing watches your
 keyboard. A question is always sent.
 
-<img src="docs/images/settings.png" width="280" alt="Settings: the notification mode picker, the quiet window, and where updates come from">
+<img src="docs/images/settings.png" width="280" alt="Settings: what the transcript shows, the notification mode picker, the quiet window, and where updates come from">
 
 **Updates over the same SSH connection — no cable, no store.** `tool/publish.sh`
 builds a release APK and drops it, with its build number, in `~/.shepherd/` on
