@@ -1,0 +1,37 @@
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✨ Update available! 0.156.0 -> 0.159.0                                                             │
+│ Run sh -c 'curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh' to update. │
+│                                                                                                     │
+│ See full release notes:                                                                             │
+│ https://github.com/openai/codex/releases/latest                                                     │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭──────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.156.0)               │
+│                                          │
+│ model:     GPT-6-Luna   /model to change │
+│ directory: ~/work/cart        │
+╰──────────────────────────────────────────╯
+
+  Tip: Use the OpenAI docs MCP for API questions; enable it with codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp.
+
+
+› /model gpt-5.6-luna
+
+
+• I can’t change the model from within this conversation. Please use the model picker to select gpt-5.6-luna.
+
+  11:22 AM
+
+• Model changed to gpt-5.6-luna medium
+
+
+  Select Model and Effort
+
+
+  1. GPT-6-Luna (default)    Fast and affordable model for easier tasks.
+  2. GPT-5.6-Terra           Older balanced model for straightforward work.
+› 3. GPT-5.6-Luna (current)  Older fast and efficient model.
+  4. GPT-5.5                 Legacy coding model.
+
+  enter select · esc back

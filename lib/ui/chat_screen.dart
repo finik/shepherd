@@ -242,9 +242,13 @@ class _ChatScreenState extends State<ChatScreen> {
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: d.ground,
+      // Scrolls rather than clips on a short screen, where the last entry
+      // would otherwise be out of reach.
+      isScrollControlled: true,
       builder: (sheetContext) => SafeArea(
         child: StatefulBuilder(
-          builder: (context, setSheetState) => Column(
+          builder: (context, setSheetState) => SingleChildScrollView(
+            child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -284,8 +288,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 setSheetState(() {});
                 setState(() {});
               }),
+              const Divider(height: 1),
+              ListTile(
+                title: Text('Close agent',
+                    style: d.rowTitle.copyWith(color: d.accentText)),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _close(pane);
+                },
+              ),
               const SizedBox(height: 8),
             ],
+            ),
           ),
         ),
       ),
@@ -309,6 +323,36 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     ),
   );
+  /// Ends the agent and closes its pane on the host, after saying so: this
+  /// is the one thing in the menu that cannot be taken back from the phone.
+  Future<void> _close(Pane pane) async {
+    final d = D.of(context);
+    final navigator = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: d.ground,
+        title: Text('Close ${pane.sessionName}?', style: d.rowTitle),
+        content: Text(
+          'The agent stops and its pane closes on the host. What it wrote '
+          'stays in its transcript.',
+          style: d.prose.copyWith(fontSize: 15),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('CANCEL'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text('CLOSE', style: TextStyle(color: d.accentText)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (await widget.state.closePane(pane.paneId)) navigator.maybePop();
+  }
 
   Future<void> _rename(Pane pane) async {
     final controller = TextEditingController(text: pane.sessionName);
@@ -391,6 +435,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ? _older(d, pad)
             : _turn(d, turns[turns.length - 1 - i], pad),
       );
+
   /// The top of the thread. The phone holds only the recent end of a
   /// conversation; reaching the top asks the host for what came before.
   Widget _older(D d, double pad) {

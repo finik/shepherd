@@ -399,6 +399,8 @@ class AppState extends ChangeNotifier {
 
       host = await _rpc!.snapshot();
       if (generation != _connectGeneration) return;
+      // Another host, or the same one after a while: its agents may differ.
+      _models.clear();
       _startPolling();
       selectedPaneId ??= host.focusedPaneId;
       conn = ConnState.connected;
@@ -2970,6 +2972,612 @@ if found:
     }
   }
 
+  /// The flag each agent takes to start on a given model.
+  static const modelFlags = <String, String>{
+    'claude': '--model',
+    'codex': '-m',
+    'pi': '--model',
+    'omp': '--model',
+    'opencode': '-m',
+    'muse': '--model',
+  };
+
+  /// Each agent's models, asked for once per connection: the list changes
+  /// when an agent is updated or logged in again, not while it is in use.
+  final Map<String, Future<List<ModelOption>>> _models = {};
+
+  /// The models [harness] offers on this host, from wherever that agent keeps
+  /// them: a command it has for listing them, or the catalog it caches.
+  Future<List<ModelOption>> listModels(String harness) =>
+      _models[harness] ??= _fetchModels(harness).then((found) {
+        // An empty answer is more likely a hiccup than an agent with no
+        // models; ask again next time.
+        if (found.isEmpty) _models.remove(harness);
+        return found;
+      });
+
+  Future<List<ModelOption>> _fetchModels(String harness) async {
+    final ssh = _ssh;
+    if (ssh == null || !harnesses.containsKey(harness)) return const [];
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        'python3 - ${_shellQuote(harness)} <<\'SHEPHERD_MODELS\'\n'
+        '$_modelsPython\n'
+        'SHEPHERD_MODELS',
+        timeout: const Duration(seconds: 90),
+      );
+      return parseModels(utf8.decode(out, allowMalformed: true));
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// The models in the listing script's output: its last `@@@` line, JSON.
+  @visibleForTesting
+  static List<ModelOption> parseModels(String output) {
+    final line = output
+        .split('\n')
+        .lastWhere((l) => l.startsWith('@@@'), orElse: () => '');
+    if (line.isEmpty) return const [];
+    final decoded = jsonDecode(line.substring(3));
+    if (decoded is! List) return const [];
+    return [
+      for (final m in decoded.whereType<Map>())
+        if (m['id'] is String)
+          ModelOption(
+            id: m['id'] as String,
+            label: (m['label'] as String?) ?? m['id'] as String,
+            detail: (m['detail'] as String?) ?? '',
+            context: (m['context'] as num?)?.toInt(),
+            efforts: [
+              for (final e in (m['efforts'] as List? ?? const []))
+                if (e is String) e
+            ],
+          )
+    ];
+  }
+
+  static const _modelsPython = r'''import json, os, re, subprocess, sys
+# Prints one JSON list of {id, label, detail, context, efforts} for the agent
+# named in argv[1]; efforts are the levels the model can be asked to think at.
+CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+PI_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+harness = sys.argv[1]
+home = os.path.expanduser('~')
+out = []
+
+
+def shell(command):
+    # The agent's own command, found the way its pane's shell finds it.
+    try:
+        return subprocess.run(
+            [os.environ.get('SHELL') or '/bin/sh', '-lic', command],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=60).stdout
+    except Exception:
+        return ''
+
+
+def load(path):
+    try:
+        with open(os.path.join(home, path)) as handle:
+            return json.load(handle)
+    except Exception:
+        return None
+
+
+if harness == 'claude':
+    for alias, detail in (('opus', 'Latest Opus'), ('sonnet', 'Latest Sonnet'),
+                          ('haiku', 'Latest Haiku'), ('fable', 'Latest Fable')):
+        out.append({'id': alias, 'label': alias, 'detail': detail,
+                    'efforts': [] if alias == 'haiku' else CLAUDE_EFFORTS})
+    for option in (load('.claude.json') or {}).get('additionalModelOptionsCache') or []:
+        if isinstance(option, dict) and option.get('value'):
+            out.append({'id': option['value'], 'label': option.get('label') or option['value'],
+                        'detail': option.get('description') or '',
+                        'context': 1000000 if '[1m]' in option['value'] else None,
+                        'efforts': [] if 'haiku' in option['value'] else CLAUDE_EFFORTS})
+elif harness == 'codex':
+    for model in (load('.codex/models_cache.json') or {}).get('models') or []:
+        if model.get('visibility') == 'list' and model.get('slug'):
+            out.append({'id': model['slug'], 'label': model.get('display_name') or model['slug'],
+                        'detail': model.get('description') or '',
+                        'context': model.get('context_window'),
+                        'efforts': [level.get('effort') for level in
+                                    model.get('supported_reasoning_levels') or []
+                                    if isinstance(level, dict) and level.get('effort')]})
+elif harness == 'muse':
+    root = os.path.join(home, '.local/share/muse/model-catalog')
+    for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        catalog = load(os.path.join(root, name)) or {}
+        for row in catalog.get('rows') or []:
+            if row.get('visibility') == 'visible' and row.get('model_id'):
+                out.append({'id': row['model_id'], 'label': row.get('display_label') or row['model_id'],
+                            'detail': row.get('description') or '',
+                            'context': row.get('context_limit'),
+                            'efforts': [v.get('tier') for v in
+                                        row.get('reasoning_effort_variants') or []
+                                        if isinstance(v, dict) and v.get('tier')]})
+elif harness == 'pi':
+    for line in shell('pi --list-models').splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] != 'provider' and not line.startswith('['):
+            size = None
+            if len(parts) > 2:
+                found = re.match(r'^([\d.]+)([KM])$', parts[2])
+                if found:
+                    size = int(float(found.group(1)) * (1000 if found.group(2) == 'K' else 1000000))
+            thinks = len(parts) > 4 and parts[4] == 'yes'
+            out.append({'id': parts[0] + '/' + parts[1], 'label': parts[1], 'detail': parts[0],
+                        'context': size, 'efforts': PI_EFFORTS if thinks else []})
+elif harness == 'omp':
+    text = shell('omp models --json')
+    try:
+        models = json.loads(text[text.index('{'):]).get('models') or []
+    except ValueError:
+        models = []
+    for model in models:
+        if model.get('kind', 'chat') == 'chat' and model.get('selector'):
+            out.append({'id': model['selector'], 'label': model.get('name') or model['id'],
+                        'detail': model.get('provider') or '',
+                        'context': model.get('contextWindow')})
+elif harness == 'opencode':
+    # Windows from the catalog OpenCode caches, keyed by provider and model.
+    catalog = load('.cache/opencode/models.json') or {}
+    for line in shell('opencode models').splitlines():
+        line = line.strip()
+        if re.match(r'^[\w.-]+/[\w.:-]+$', line):
+            provider, _, model = line.partition('/')
+            limit = (((catalog.get(provider) or {}).get('models') or {}).get(model) or {}).get('limit') or {}
+            out.append({'id': line, 'label': model, 'detail': provider,
+                        'context': limit.get('context')})
+seen = set()
+unique = [m for m in out if not (m['id'] in seen or seen.add(m['id']))]
+print('@@@' + json.dumps(unique))''';
+
+  /// Whether a running [harness] can be switched to another model, or
+  /// another effort, from the phone. omp and OpenCode pick both in browsers
+  /// of their own that are not driven blind; they take them at start.
+  static bool canSwitchModel(String? harness) =>
+      const {'claude', 'pi', 'codex', 'muse'}.contains(harness);
+
+  /// The effort levels an agent offers when the model is left as it is, in
+  /// its own words.
+  static List<String> effortsFor(String? harness, List<ModelOption> models) =>
+      switch (harness) {
+        'claude' => const ['low', 'medium', 'high', 'xhigh', 'max'],
+        'pi' => const ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        _ => [
+            for (final e in {for (final m in models) ...m.efforts}) e,
+          ],
+      };
+
+  /// Codex's reasoning levels as its list shows them; max and ultra sit a
+  /// level down, under "More reasoning…".
+  static const _codexEfforts = {
+    'none': 'None',
+    'minimal': 'Minimal',
+    'low': 'Low',
+    'medium': 'Medium',
+    'high': 'High',
+    'xhigh': 'Extra high',
+  };
+  static const _codexMore = 'More reasoning…';
+
+  /// Switch a running agent to [model], to [effort], or both; null leaves
+  /// that one as it is. Claude, Pi and muse take either with a command;
+  /// Codex opens a list, whose rows are found on screen and moved to.
+  /// Neither is saved as the agent's default for new sessions.
+  Future<bool> switchModel(Pane pane,
+      {ModelOption? model,
+      String? effort,
+      List<ModelOption> options = const []}) async {
+    final rpc = _rpc;
+    if (rpc == null || (model == null && effort == null)) return false;
+    touchActivity();
+    Future<void> pause(int ms) =>
+        Future<void>.delayed(Duration(milliseconds: ms));
+    Future<void> type(String text) async {
+      await rpc.sendText(pane.paneId, text);
+      await pause(250);
+      await rpc.sendKeys(pane.paneId, const ['enter']);
+    }
+
+    Future<String> screen() =>
+        rpc.readPane(pane.paneId, source: 'visible', lines: 40);
+
+    // Move to [target] in the list on screen and choose it with [confirm].
+    // Not found, the list is closed: [depth] lists deep.
+    Future<bool> pick(List<String> labels, String target,
+        {String confirm = 'enter', int depth = 1}) async {
+      final keys = pickerKeys(await screen(), labels, target, confirm: confirm);
+      if (keys == null) {
+        for (var i = 0; i < depth; i++) {
+          await rpc.sendKeys(pane.paneId, const ['esc']);
+          await pause(200);
+        }
+        return false;
+      }
+      for (final key in keys) {
+        await rpc.sendKeys(pane.paneId, [key]);
+        await pause(120);
+      }
+      return true;
+    }
+
+    try {
+      switch (pane.agent) {
+        case 'claude':
+          // Claude saves what /model and /effort pick as the defaults for
+          // every new session, so what it had saved is read first and put
+          // back after.
+          final before = await _claudeDefault('read');
+          if (model != null) {
+            await type('/model ${model.id}');
+            await pause(1500);
+          }
+          if (effort != null) {
+            await type('/effort $effort');
+            await pause(1500);
+          }
+          if (before != null) await _claudeDefault('restore', before);
+          return true;
+        case 'pi':
+          // The first Enter takes the completion Pi offers; the second runs
+          // the command. Pi keeps both to this session.
+          if (model != null) {
+            await type('/model ${model.id}');
+            await pause(400);
+            await rpc.sendKeys(pane.paneId, const ['enter']);
+            await pause(800);
+          }
+          if (effort != null) {
+            await type('/thinking $effort');
+            await pause(400);
+            await rpc.sendKeys(pane.paneId, const ['enter']);
+          }
+          return true;
+        case 'muse':
+          // muse saves both as its defaults for new sessions; its settings
+          // are kept aside and put back once the switch is done.
+          final saved = await _museSettings('save');
+          var ok = true;
+          if (model != null) {
+            await type('/model');
+            await pause(1500);
+            ok = await pick([
+              for (final o in options.isEmpty ? [model] : options) o.id
+            ], model.id);
+            await pause(1000);
+            // Some models ask for a level next, the cursor on the current
+            // one.
+            if (ok && _listShown(await screen(), _museLevels)) {
+              await rpc.sendKeys(pane.paneId, const ['enter']);
+              await pause(1000);
+            }
+          }
+          if (ok && effort != null) {
+            await type('/effort $effort');
+            await pause(1000);
+          }
+          if (saved != null) await _museSettings('restore', saved);
+          return ok;
+        case 'codex':
+          await type('/model');
+          await pause(1500);
+          if (model != null) {
+            if (!await pick([
+              for (final o in options.isEmpty ? [model] : options) o.label
+            ], model.label)) {
+              return false;
+            }
+          } else {
+            // The list opens on the model in use.
+            await rpc.sendKeys(pane.paneId, const ['enter']);
+          }
+          await pause(1000);
+          // Codex then asks for a reasoning level: Enter would save it as the
+          // default for new sessions, `s` keeps it to this one.
+          if (effort == null) {
+            await rpc.sendText(pane.paneId, 's');
+            return true;
+          }
+          const levels = [..._codexEffortLabels, _codexMore];
+          final label = _codexEfforts[effort];
+          if (label != null) {
+            return await pick(levels, label, confirm: 's', depth: 2);
+          }
+          if (!await pick(levels, _codexMore, depth: 2)) return false;
+          await pause(800);
+          final more = effort[0].toUpperCase() + effort.substring(1);
+          return await pick(const ['Max', 'Ultra'], more, confirm: 's', depth: 3);
+      }
+    } catch (e) {
+      error = 'could not switch: $e';
+      notifyListeners();
+    }
+    return false;
+  }
+
+  static const _codexEffortLabels = [
+    'None', 'Minimal', 'Low', 'Medium', 'High', 'Extra high'
+  ];
+  static const _museLevels = [
+    'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'
+  ];
+
+  /// Whether a list of [labels] with a cursor in it is on [screen].
+  static bool _listShown(String screen, List<String> labels) =>
+      labels.any((l) => pickerKeys(screen, labels, l) != null);
+
+  /// Keep muse's settings file aside, or put a kept copy back. The copy is
+  /// base64, or empty when there was no file.
+  Future<String?> _museSettings(String mode, [String? kept]) async {
+    final ssh = _ssh;
+    if (ssh == null) return null;
+    const path = r'"$HOME/.config/muse/settings.json"';
+    try {
+      if (mode == 'save') {
+        final out = await HerdrClient.run(
+            ssh,
+            'if [ -f $path ]; then printf "@@@"; base64 < $path | tr -d "\\n"; '
+            'else printf "@@@"; fi',
+            timeout: const Duration(seconds: 15));
+        final text = utf8.decode(out, allowMalformed: true);
+        final at = text.lastIndexOf('@@@');
+        return at < 0 ? null : text.substring(at + 3).trim();
+      }
+      await HerdrClient.run(
+          ssh,
+          (kept ?? '').isEmpty
+              ? 'rm -f $path'
+              : 'printf %s ${_shellQuote(kept!)} | base64 -d > $path.shepherd '
+                  '&& mv $path.shepherd $path',
+          timeout: const Duration(seconds: 15));
+      return 'ok';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Read Claude's saved default model, or put [value] back as it. The value
+  /// is JSON: the model, or null when none was saved.
+  Future<String?> _claudeDefault(String mode, [String? value]) async {
+    final ssh = _ssh;
+    if (ssh == null) return null;
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        'python3 - $mode ${_shellQuote(value ?? '')} '
+        '<<\'SHEPHERD_CLAUDE\'\n'
+        '$_claudeDefaultPython\n'
+        'SHEPHERD_CLAUDE',
+        timeout: const Duration(seconds: 15),
+      );
+      final line = utf8
+          .decode(out, allowMalformed: true)
+          .split('\n')
+          .lastWhere((l) => l.startsWith('@@@'), orElse: () => '');
+      return line.isEmpty ? null : line.substring(3);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _claudeDefaultPython = r'''import json, os, sys
+path = os.path.expanduser('~/.claude/settings.json')
+# What /model and /effort save: the model, and the effort for all models
+# and for each one.
+KEYS = ('model', 'effortLevel', 'modelSettings')
+try:
+    with open(path) as handle:
+        settings = json.load(handle)
+except (OSError, ValueError):
+    settings = None
+if sys.argv[1] == 'read':
+    if isinstance(settings, dict):
+        print('@@@' + json.dumps({k: settings[k] for k in KEYS if k in settings}))
+elif isinstance(settings, dict):
+    before = json.loads(sys.argv[2])
+    changed = False
+    for key in KEYS:
+        if key in before:
+            if settings.get(key) != before[key]:
+                settings[key] = before[key]
+                changed = True
+        elif key in settings:
+            del settings[key]
+            changed = True
+    if changed:
+        with open(path + '.shepherd', 'w') as handle:
+            handle.write(json.dumps(settings, indent=2) + '\n')
+        os.replace(path + '.shepherd', path)
+    print('@@@ok')''';
+
+  /// The keys that move a list's cursor to [target] and choose it with
+  /// [confirm], given the list on [screen] and every label it may show. Null when the list, its
+  /// cursor or the target is not on screen.
+  @visibleForTesting
+  static List<String>? pickerKeys(
+      String screen, List<String> labels, String target,
+      {String confirm = 'enter'}) {
+    final rows = <String>[];
+    int? cursor;
+    for (final line in screen.split(RegExp(r'\r?\n'))) {
+      final m = RegExp(r'^\s*([›❯⟩>])?\s*(?:\d+\.\s+)?(\S.*)$').firstMatch(line);
+      if (m == null) continue;
+      final text = m.group(2)!;
+      // The longest label the row begins with: "muse-spark-1.3" is also the
+      // start of "muse-spark-1.3-contributor".
+      String? label;
+      for (final l in labels) {
+        final follows = text.length == l.length ||
+            (text.length > l.length && text.startsWith(RegExp(r'[\s(]'), l.length));
+        if (text.startsWith(l) && follows && (label == null || l.length > label.length)) {
+          label = l;
+        }
+      }
+      if (label == null) continue;
+      if (m.group(1) != null) cursor = rows.length;
+      rows.add(label);
+    }
+    final to = rows.indexOf(target);
+    if (cursor == null || to < 0) return null;
+    return [
+      for (var i = cursor; i < to; i++) 'down',
+      for (var i = cursor; i > to; i--) 'up',
+      confirm,
+    ];
+  }
+
+  /// The agents Shepherd can start, with the command that starts each.
+  static const harnesses = <String, String>{
+    'claude': 'claude',
+    'codex': 'codex',
+    'pi': 'pi',
+    'omp': 'omp',
+    'opencode': 'opencode',
+    'muse': 'muse',
+  };
+
+  /// Which of [harnesses] are installed on the host, looked up the way the
+  /// pane's own shell would find them: an interactive login shell, so the
+  /// PATH additions in the user's profile apply.
+  Future<List<String>> installedHarnesses() async {
+    final ssh = _ssh;
+    if (ssh == null) return const [];
+    final names = harnesses.values.join(' ');
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        '"\${SHELL:-/bin/sh}" -lic \'for c in $names; do '
+        'command -v "\$c" >/dev/null 2>&1 && echo "@@@\$c"; done\' '
+        '</dev/null 2>/dev/null',
+        timeout: const Duration(seconds: 20),
+      );
+      final found = {
+        for (final line in utf8.decode(out, allowMalformed: true).split('\n'))
+          if (line.trim().startsWith('@@@')) line.trim().substring(3)
+      };
+      return [
+        for (final e in harnesses.entries)
+          if (found.contains(e.value)) e.key
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// A folder on the host and the folders in it, hidden ones left out, for
+  /// choosing where to start an agent. An empty [path] means the home folder.
+  Future<({String path, List<String> folders})?> listFolders(
+      String path) async {
+    final ssh = _ssh;
+    if (ssh == null) return null;
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        'python3 - ${_shellQuote(path)} <<\'SHEPHERD_DIRS\'\n'
+        '$_foldersPython\n'
+        'SHEPHERD_DIRS',
+        timeout: const Duration(seconds: 20),
+      );
+      final lines = utf8
+          .decode(out, allowMalformed: true)
+          .split('\n')
+          .where((l) => l.isNotEmpty)
+          .toList();
+      final at = lines.indexWhere((l) => l.startsWith('@@@'));
+      if (at < 0) return null;
+      return (
+        path: lines[at].substring(3),
+        folders: lines.sublist(at + 1),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _foldersPython = r'''import os, sys
+path = os.path.realpath(os.path.expanduser(sys.argv[1] or '~'))
+if not os.path.isdir(path):
+    path = os.path.expanduser('~')
+print('@@@' + path)
+try:
+    names = sorted(os.listdir(path), key=str.lower)
+except OSError:
+    names = []
+for name in names:
+    if name.startswith('.'):
+        continue
+    if os.path.isdir(os.path.join(path, name)):
+        print(name)''';
+
+  /// The folders agents already run in, for starting another one beside
+  /// them without browsing.
+  List<String> get agentFolders {
+    final seen = <String>{};
+    return [
+      for (final p in host.agentPanes)
+        if (p.cwd != null && p.cwd!.isNotEmpty && seen.add(p.cwd!)) p.cwd!
+    ];
+  }
+
+  /// Start [harness] in a new Herdr workspace in [cwd]. Herdr has no call
+  /// that runs a command, so the command is typed into the new pane's shell,
+  /// as its own CLI does.
+  Future<bool> startAgent(String cwd, String harness, {String? model}) async {
+    final rpc = _rpc;
+    final base = harnesses[harness];
+    final command = model == null || base == null
+        ? base
+        : '$base ${modelFlags[harness]} ${_shellQuote(model)}';
+    if (rpc == null || command == null) return false;
+    touchActivity();
+    try {
+      final label = cwd.split('/').where((s) => s.isNotEmpty).lastOrNull;
+      final paneId = await rpc.createWorkspace(cwd, label: label);
+      if (paneId == null) return false;
+      await rpc.sendText(paneId, command);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await rpc.sendKeys(paneId, const ['enter']);
+      await refreshNow();
+      return true;
+    } catch (e) {
+      error = 'could not start $harness: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// Close an agent's pane on the host. The agent stops; its transcript
+  /// stays on disk. Returns whether Herdr accepted it.
+  Future<bool> closePane(String paneId) async {
+    final rpc = _rpc;
+    if (rpc == null) return false;
+    try {
+      await rpc.closePane(paneId);
+    } catch (e) {
+      error = 'close failed: $e';
+      notifyListeners();
+      return false;
+    }
+    if (selectedPaneId == paneId) selectedPaneId = null;
+    _blockedPrompts.remove(paneId);
+    host = HostState(
+      workspaces: host.workspaces,
+      tabs: host.tabs,
+      panes: host.panes.where((p) => p.paneId != paneId).toList(),
+      agents: host.agents.where((p) => p.paneId != paneId).toList(),
+      focusedWorkspaceId: host.focusedWorkspaceId,
+      focusedTabId: host.focusedTabId,
+      focusedPaneId: host.focusedPaneId,
+    );
+    notifyListeners();
+    return true;
+  }
+
   Future<void> stop() async {
     final pane = selectedPane;
     if (pane == null || _rpc == null) return;
@@ -3226,4 +3834,26 @@ class _PendingSend {
   final DateTime at = DateTime.now();
 
   _PendingSend(this.text, this.turnsAtSend);
+}
+
+/// A model an agent can run on: the id its flag and command take, and what
+/// to call it.
+class ModelOption {
+  final String id;
+  final String label;
+  final String detail;
+
+  /// The model's context window in tokens, when the agent lists it.
+  final int? context;
+
+  /// The levels the model can be asked to think at, in the agent's words;
+  /// empty when it has none.
+  final List<String> efforts;
+
+  const ModelOption(
+      {required this.id,
+      required this.label,
+      this.detail = '',
+      this.context,
+      this.efforts = const []});
 }

@@ -121,6 +121,33 @@ void main() {
     expect(find.text('Rename'), findsOneWidget);
   });
 
+  testWidgets('closing an agent asks first', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final state = working();
+    state.turns = [Turn(id: 'c0', userText: 'hi')];
+    await show(tester, state);
+    await tester.tap(find.byKey(const ValueKey('chat-menu')));
+    // The sheet slides in; the spinner keeps pumpAndSettle from returning.
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    await tester.ensureVisible(find.text('Close agent'));
+    await tester.tap(find.text('Close agent'));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    expect(find.textContaining('The agent stops'), findsOneWidget);
+    await tester.tap(find.text('CANCEL'));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    // Cancelled: still in the chat, nothing closed.
+    expect(find.textContaining('The agent stops'), findsNothing);
+    expect(state.selectedPaneId, 'w1:p1');
+  });
+
   testWidgets('reconnecting is a wait, not an error', (tester) async {
     final state = working()..conn = ConnState.connecting;
     await tester.pumpWidget(MaterialApp(home: ChatScreen(state: state)));

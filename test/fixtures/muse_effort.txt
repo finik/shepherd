@@ -1,0 +1,11 @@
+  Effort  |  Select Meta reasoning effort
+
+  filter
+  minimal
+  low
+  medium
+  high
+  xhigh
+⟩ max                   current
+
+  ↑↓ move · type to filter · enter confirm · esc go back

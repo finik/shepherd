@@ -4,6 +4,7 @@ import '../herdr/models.dart';
 import '../state/app_state.dart';
 import 'agent_glyph.dart';
 import 'chat_screen.dart';
+import 'new_agent_screen.dart';
 import 'design.dart';
 import 'machines_screen.dart';
 import 'settings_screen.dart';
@@ -46,6 +47,12 @@ class _SessionsScreenState extends State<SessionsScreen> {
     if (mounted) setState(() {});
   }
 
+  void _newAgent() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => NewAgentScreen(state: widget.state),
+    ));
+  }
+
   void _openPane(Pane pane) {
     widget.state.selectPane(pane.paneId);
     Navigator.of(context).push(MaterialPageRoute(
@@ -71,6 +78,27 @@ class _SessionsScreenState extends State<SessionsScreen> {
 
     return Scaffold(
       backgroundColor: d.ground,
+      // Starting an agent needs a live host; with none there is nothing to
+      // start it on.
+      floatingActionButton: state.conn == ConnState.connected
+          ? Padding(
+              // Clear of the machines footer.
+              padding: const EdgeInsets.only(bottom: 64),
+              child: SizedBox(
+                width: 64,
+                height: 64,
+                child: Material(
+                  color: d.ink,
+                  elevation: 4,
+                  child: InkWell(
+                    key: const ValueKey('new-agent'),
+                    onTap: _newAgent,
+                    child: Icon(Icons.add, size: 34, color: d.ground),
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: SafeArea(
         child: Column(
           children: [

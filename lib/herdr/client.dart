@@ -184,6 +184,21 @@ class HerdrClient {
   Future<void> sendKeys(String paneId, List<String> keys) =>
       call('pane.send_input', {'pane_id': paneId, 'keys': keys});
 
+  /// A new workspace with one pane, started in [cwd]. Returns the pane id.
+  Future<String?> createWorkspace(String cwd, {String? label}) async {
+    final res = await call('workspace.create', {
+      'cwd': cwd,
+      'label': ?label,
+      'focus': false,
+    });
+    return ((res['root_pane'] as Map?)?['pane_id']) as String?;
+  }
+
+  /// Closes the pane, and the agent running in it. Herdr closes the
+  /// workspace too when this was its last pane.
+  Future<void> closePane(String paneId) =>
+      call('pane.close', {'pane_id': paneId});
+
   /// `ReadSource` values use underscores over the socket; the CLI's
   /// `recent-unwrapped` spelling is rejected here.
   Future<String> readPane(
