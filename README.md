@@ -61,7 +61,7 @@ the row and the chat show its current step: the thought it is having, or the
 tool it is running. A long session opens on its last few turns, and scrolling
 back fetches the ones before.
 
-<img src="docs/images/chat.png" width="320" alt="A conversation several turns in, each answer with its step count beneath">
+<img src="docs/images/chat.png" width="320" alt="A conversation two turns in, a table in its answer; in the header the context pie, the plan's five-hour and weekly bars, and the model and effort">
 
 **Six agents, each read in its own format.** Claude Code, Pi, omp, Codex,
 OpenCode and muse each keep their sessions differently, and each is read as it
@@ -139,12 +139,19 @@ another effort, or both. The switch applies to that session and leaves the
 agent's saved defaults as they were. omp and OpenCode take their model when they
 start. The chat's menu closes an agent, after asking.
 
+<p>
+  <img src="docs/images/new-agent.png" width="250" alt="Starting an agent: the folder chosen, and the agents installed on the host to choose from">
+  <img src="docs/images/model.png" width="250" alt="A running agent's model and effort, with the models it offers">
+</p>
+
 **How full the context is.** A pie in the chat's header
 shows how much of the model's context the latest call used, turning red at
 80%, with the model and its reasoning effort beneath. Tapping it opens the
 details, with buttons to compact or clear the context, each after asking.
 The context figure is what the agent itself recorded for its latest call, so it
 drops after a compaction without the app keeping count.
+
+<img src="docs/images/context.png" width="280" alt="The context pie's details: tokens used of the window, the model, the session's cost, and buttons to clear or compact">
 
 **What a session has cost.** The pie's details show the session's cost at API
 rates, added up on the host from the whole transcript. Where the agent records
@@ -164,6 +171,8 @@ plugin's saved readings first, then
 has nothing for, along with CodexBar's forecast of whether a limit will last
 until it resets. Either one is enough, and neither is required: without them
 there are no bars and the cost is only a cost.
+
+<img src="docs/images/subscriptions.png" width="320" alt="Every limit of every plan: five-hour and weekly windows for Claude and Codex, a weekly one for Grok, each with how much is used and when it resets">
 
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
 and dirty count for each agent's folder. More than one Herdr session on a host:
