@@ -146,6 +146,170 @@ class AppState extends ChangeNotifier {
   final Map<String, int> _windowStart = {};
   final Map<String, int> _olderTurns = {};
 
+  /// How full the open agent's context is, as of its latest model call.
+  ContextUsage? get contextUsage => _usage;
+  ContextUsage? _usage;
+
+  /// The model's context window for [contextUsage]: written by the agent,
+  /// listed with its models, or — for a Claude model no catalog lists —
+  /// assumed, which [contextWindowAssumed] says.
+  int? contextWindow;
+  bool contextWindowAssumed = false;
+
+  /// Windows already worked out, by agent and model.
+  final Map<String, ({int? window, bool assumed})> _windows = {};
+
+  /// The share of the window in use, 0 to 1; null while either is unknown.
+  double? get contextFraction {
+    final u = _usage, w = contextWindow;
+    if (u == null || w == null || w <= 0) return null;
+    return (u.used / w).clamp(0.0, 1.0);
+  }
+
+  /// What the open session has cost so far, once [refreshCost] has read it.
+  SessionCost? get sessionCost => _costs[_boundPath ?? ''];
+  final Map<String, SessionCost> _costs = {};
+  final Map<String, Future<void>> _costing = {};
+
+  /// Whether a reading of the open session's cost is under way.
+  bool get costLoading => _costing.containsKey(_boundPath);
+
+  /// Read the open session's cost on the host, where the whole transcript
+  /// is: the phone holds only its last few turns. A reading under half a
+  /// minute old stands.
+  Future<void> refreshCost() {
+    final path = _boundPath, agent = selectedPane?.agent, ssh = _ssh;
+    if (path == null || agent == null || ssh == null) return Future.value();
+    final known = _costs[path];
+    if (known != null &&
+        DateTime.now().difference(known.at) < const Duration(seconds: 30)) {
+      return Future.value();
+    }
+    return _costing[path] ??= () async {
+      notifyListeners();
+      try {
+        final out = await HerdrClient.run(
+          ssh,
+          'python3 - ${_shellQuote(path)} ${_shellQuote(agent)} '
+          '<<\'SHEPHERD_COST\'\n'
+          '$_costPython\n'
+          'SHEPHERD_COST',
+          timeout: const Duration(seconds: 60),
+        );
+        final cost = SessionCost.parse(utf8.decode(out, allowMalformed: true));
+        if (cost != null) _costs[path] = cost;
+      } catch (_) {
+        // Unread; the next look asks again.
+      } finally {
+        _costing.remove(path);
+        notifyListeners();
+      }
+    }();
+  }
+
+  @visibleForTesting
+  void setCostForTest(SessionCost cost) {
+    _costs[_boundPath ?? ''] = cost;
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void setContextForTest(ContextUsage usage, int window) {
+    _usage = usage;
+    contextWindow = window;
+    notifyListeners();
+  }
+
+  void _setUsage(ContextUsage? usage, Pane? pane) {
+    final sameModel = usage?.model == _usage?.model;
+    _usage = usage;
+    if (usage == null) {
+      contextWindow = null;
+      contextWindowAssumed = false;
+      notifyListeners();
+      return;
+    }
+    if (usage.window != null) {
+      contextWindow = usage.window;
+      contextWindowAssumed = false;
+      notifyListeners();
+      return;
+    }
+    final agent = pane?.agent ?? '';
+    final key = '$agent|${usage.model}';
+    final known = _windows[key];
+    if (known != null) {
+      contextWindow = _claudeFallback(agent, known.window, usage);
+      contextWindowAssumed = known.assumed || known.window == null;
+      notifyListeners();
+      return;
+    }
+    if (!sameModel) contextWindow = null;
+    notifyListeners();
+    unawaited(_resolveWindow(agent, usage).then((found) {
+      _windows[key] = found;
+      if (_usage?.model != usage.model) return;
+      contextWindow = _claudeFallback(agent, found.window, _usage!);
+      contextWindowAssumed = found.assumed || found.window == null;
+      notifyListeners();
+    }));
+  }
+
+  /// A Claude model no catalog lists: 200K unless the context is already
+  /// past it, which only a 1M window allows.
+  static int? _claudeFallback(String agent, int? window, ContextUsage usage) =>
+      window ??
+      (agent == 'claude' ? (usage.used > 200000 ? 1000000 : 200000) : null);
+
+  Future<({int? window, bool assumed})> _resolveWindow(
+      String agent, ContextUsage usage) async {
+    int? find(List<ModelOption> models, String id) {
+      for (final m in models) {
+        if (m.context == null) continue;
+        if (m.id == id || m.id.endsWith('/$id') || m.label == id) {
+          return m.context;
+        }
+      }
+      return null;
+    }
+
+    final own = find(await listModels(agent), usage.model);
+    if (own != null) return (window: own, assumed: false);
+    // Claude lists no windows of its own; Pi and omp keep a catalog of
+    // Anthropic's models that does.
+    if (agent == 'claude') {
+      for (final other in const ['pi', 'omp']) {
+        final w = find(await listModels(other), 'anthropic/${usage.model}');
+        if (w != null) return (window: w, assumed: false);
+      }
+      return (window: null, assumed: true);
+    }
+    return (window: null, assumed: false);
+  }
+
+  /// Ask the agent to summarise its conversation to free up context.
+  Future<void> compact(Pane pane) => _command(pane, '/compact');
+
+  /// Start the agent on a fresh conversation. The old one stays in its
+  /// transcript on the host.
+  Future<void> clearContext(Pane pane) => _command(
+      pane,
+      const {'opencode', 'omp', 'pi'}.contains(pane.agent) ? '/new' : '/clear');
+
+  Future<void> _command(Pane pane, String command) async {
+    final rpc = _rpc;
+    if (rpc == null) return;
+    touchActivity();
+    try {
+      await rpc.sendText(pane.paneId, command);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await rpc.sendKeys(pane.paneId, const ['enter']);
+    } catch (e) {
+      error = '$command failed: $e';
+      notifyListeners();
+    }
+  }
+
   /// Whether the open conversation has history before what is on screen.
   bool get hasOlder => (_windowStart[_boundPath] ?? 0) > 0;
 
@@ -970,6 +1134,7 @@ for line in wanted:
     // nothing on screen it loads like any other.
     transcriptLoading = !silent || turns.isEmpty;
     transcriptDiagnostic = null;
+    if (!silent) _setUsage(null, pane);
     _tailSession?.close();
     _tailSession = null;
     _tailAlive = false;
@@ -1105,6 +1270,8 @@ for line in wanted:
           // Without this the first live turn reuses the first history turn's
           // id, which is a loaded gun for anything that keys by it.
           adapter.seed(adapter.turns.length);
+          adapter.usage = usageFromMaps(parsed) ?? _usage;
+          _setUsage(adapter.usage, pane);
           adapter.baseOffset = endOffset;
           _adapter = adapter;
           _publish();
@@ -1460,6 +1627,15 @@ def records(message, part):
     when = stamp(((message.get('time') or {}).get('created')) or 0)
 
     def line(msg):
+        # The call's context size, in Pi's usage shape, on what the agent
+        # said: the latest one says how full the context is.
+        tokens = message.get('tokens') if role == 'assistant' else None
+        if isinstance(tokens, dict) and msg.get('role') == 'assistant':
+            cache = tokens.get('cache') or {}
+            msg['usage'] = {'input': tokens.get('input') or 0,
+                            'cacheRead': cache.get('read') or 0,
+                            'cacheWrite': cache.get('write') or 0}
+            msg['model'] = message.get('modelID') or ''
         return {'type': 'message', 'timestamp': when, 'message': msg}
 
     if role == 'user':
@@ -1770,6 +1946,46 @@ for slot, payload in pending[-THUMBS:]:
     small = thumbnail(payload)
     if small:
         slot['__thumb'] = small
+
+# Pi writes its thinking level once, near the top, and again only when it
+# changes: a window that starts later would not know it. Send the one in
+# force ahead of the window. Only Pi and omp write it, early, so a file
+# without it in its first stretch is not searched.
+LEVEL = b'"type":"thinking_level_change"'
+
+
+def level_before(start):
+    step = 4 << 20
+    with open(path, 'rb') as handle:
+        if LEVEL not in handle.read(64 << 10):
+            return None
+        hi = start
+        while hi > 0:
+            lo = max(0, hi - step)
+            handle.seek(lo)
+            at = handle.read(hi - lo).rfind(LEVEL)
+            if at >= 0:
+                at += lo
+                near_start = max(0, at - 4096)
+                handle.seek(near_start)
+                near = handle.read(8192)
+                rel = at - near_start
+                line = near[near.rfind(b'\n', 0, rel) + 1:].split(b'\n', 1)[0]
+                try:
+                    return json.loads(line)
+                except ValueError:
+                    return None
+            if lo == 0:
+                return None
+            # Overlap by the mark, in case it straddles two reads.
+            hi = lo + len(LEVEL)
+    return None
+
+
+if len(sys.argv) <= 4 and found[cut:] and found[cut][0] > 0:
+    level = level_before(found[cut][0])
+    if level:
+        prepared.insert(0, level)
 
 # The size, then where in the file the first record sent begins: the place a
 # read further back stops.
@@ -2192,6 +2408,7 @@ if found:
         }
         if (adapter.addRecord(record)) changed = true;
       }
+      if (adapter.usage != _usage) _setUsage(adapter.usage, selectedPane);
       if (changed) {
         // Hold no more turns than the isolate path keeps.
         final hold = _maxLiveTurns + (_olderTurns[path] ?? 0);
@@ -3038,6 +3255,314 @@ if found:
     ];
   }
 
+  static const _costPython = r'''import glob, json, os, sqlite3, sys, time
+path, agent = sys.argv[1], sys.argv[2]
+
+# What a session has cost, in dollars at API rates. Where the agent writes
+# the cost itself, that is what counts; otherwise tokens are priced from
+# LiteLLM's public table, fetched here on the host and kept for a day.
+PRICES_URL = ('https://raw.githubusercontent.com/BerriAI/litellm/main/'
+              'model_prices_and_context_window.json')
+PRICES = os.path.expanduser('~/.shepherd/prices.json')
+
+
+def load_prices():
+    try:
+        fresh = time.time() - os.path.getmtime(PRICES) < 86400
+    except OSError:
+        fresh = False
+    if not fresh:
+        try:
+            try:
+                import urllib.request
+                with urllib.request.urlopen(PRICES_URL, timeout=10) as reply:
+                    data = reply.read()
+            except Exception:
+                # A Python without certificates cannot open HTTPS; curl can.
+                import subprocess
+                data = subprocess.run(
+                    ['curl', '-fsSL', '--max-time', '15', PRICES_URL],
+                    capture_output=True, check=True).stdout
+            json.loads(data)
+            os.makedirs(os.path.dirname(PRICES), exist_ok=True)
+            with open(PRICES + '.tmp', 'wb') as handle:
+                handle.write(data)
+            os.replace(PRICES + '.tmp', PRICES)
+        except Exception:
+            pass
+    try:
+        with open(PRICES) as handle:
+            return json.load(handle)
+    except Exception:
+        return {}
+
+
+table = None
+found_price = {}
+
+
+def muse_prices():
+    """muse lists what each of its models costs, per million tokens; the
+    public table has no price for its discounted models."""
+    root = os.path.expanduser('~/.local/share/muse/model-catalog')
+    for name in os.listdir(root) if os.path.isdir(root) else []:
+        try:
+            with open(os.path.join(root, name)) as handle:
+                rows = json.load(handle).get('rows') or []
+        except Exception:
+            continue
+        for row in rows:
+            cost = row.get('cost') or {}
+            try:
+                found_price[row['model_id']] = {
+                    'input_cost_per_token': float(cost['input']) / 1e6,
+                    'output_cost_per_token': float(cost['output']) / 1e6,
+                    'cache_read_input_token_cost':
+                        float(cost.get('cached') or cost['input']) / 1e6,
+                }
+            except (KeyError, TypeError, ValueError):
+                continue
+
+
+def price(model, provider=''):
+    """Per-token prices for a model, matched loosely: the table names it
+    with and without a provider, and agents add date or plan suffixes."""
+    global table
+    if model in found_price:
+        return found_price[model]
+    if table is None:
+        table = load_prices()
+    hit = None
+    name = model.split('/')[-1]
+    while name and hit is None:
+        for key in ([provider + '/' + name] if provider else []) + [name]:
+            if isinstance(table.get(key), dict) and \
+                    'input_cost_per_token' in table[key]:
+                hit = table[key]
+                break
+        if hit is None:
+            ends = sorted((k for k in table
+                           if k.endswith('/' + name) and isinstance(
+                               table[k], dict)
+                           and 'input_cost_per_token' in table[k]), key=len)
+            if ends:
+                hit = table[ends[0]]
+        if hit is None:
+            # "claude-haiku-4-5-20251001", "muse-spark-1.3-contributor"
+            cut = name.rfind('-')
+            name = name[:cut] if cut > 0 else ''
+    found_price[model] = hit
+    return hit
+
+
+usd_exact = 0.0
+usd_estimated = 0.0
+unpriced = set()
+
+
+def charge(model, fresh=0, cache_read=0, cache_write=0, cache_write_1h=0,
+           output=0, provider=''):
+    global usd_estimated
+    if not (fresh or cache_read or cache_write or cache_write_1h or output):
+        return
+    p = price(model, provider) if model else None
+    if not p:
+        unpriced.add(model or '?')
+        return
+    inp = p.get('input_cost_per_token') or 0
+    usd_estimated += (
+        fresh * inp
+        + cache_read * (p.get('cache_read_input_token_cost') or inp)
+        + cache_write * (p.get('cache_creation_input_token_cost') or inp)
+        + cache_write_1h * inp * 2
+        + output * (p.get('output_cost_per_token') or 0))
+
+
+def lines(file, start=0, marks=()):
+    with open(file, 'rb') as handle:
+        handle.seek(start)
+        for line in handle:
+            if all(m in line for m in marks):
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    pass
+
+
+def last_mark(file, mark):
+    """Where the last line holding `mark` begins, or -1."""
+    step = 4 << 20
+    with open(file, 'rb') as handle:
+        hi = os.path.getsize(file)
+        while hi > 0:
+            lo = max(0, hi - step)
+            handle.seek(lo)
+            data = handle.read(hi - lo)
+            at = data.rfind(mark)
+            if at >= 0:
+                begin = data.rfind(b'\n', 0, at)
+                if begin >= 0 or lo == 0:
+                    return lo + begin + 1
+                # The line starts in an earlier read.
+                hi = lo + at
+                while hi > 0:
+                    lo = max(0, hi - 65536)
+                    handle.seek(lo)
+                    chunk = handle.read(hi - lo)
+                    nl = chunk.rfind(b'\n')
+                    if nl >= 0:
+                        return lo + nl + 1
+                    hi = lo
+                return 0
+            if lo == 0:
+                return -1
+            hi = lo + len(mark)
+    return -1
+
+
+def claude():
+    """Claude Code writes the session's cost from time to time; calls after
+    the latest one are priced from their tokens. A reply spans several
+    records carrying the same message, so each message counts once."""
+    global usd_exact
+    since = ''
+    start = last_mark(path, b'"type":"cost-state"')
+    if start >= 0:
+        for record in lines(path, start):
+            if record.get('type') == 'cost-state':
+                usd_exact = float(record.get('totalCostUSD') or 0)
+            break
+        # Subagents write their own files; their calls after the mark count.
+        with open(path, 'rb') as handle:
+            handle.seek(max(0, start - 65536))
+            before = handle.read(start - max(0, start - 65536))
+        for line in reversed(before.split(b'\n')):
+            try:
+                since = json.loads(line).get('timestamp') or ''
+            except ValueError:
+                continue
+            if since:
+                break
+    files = [(path, max(start, 0), '')]
+    folder = path[:-len('.jsonl')] + '/subagents'
+    files += [(f, 0, since) for f in glob.glob(folder + '/*.jsonl')]
+    for file, offset, after in files:
+        calls = {}
+        for record in lines(file, offset, (b'"assistant"', b'"usage"')):
+            if record.get('type') != 'assistant':
+                continue
+            if after and (record.get('timestamp') or '') <= after:
+                continue
+            message = record.get('message') or {}
+            usage = message.get('usage')
+            if not isinstance(usage, dict):
+                continue
+            calls[message.get('id') or id(record)] = (
+                message.get('model') or '', usage)
+        for model, u in calls.values():
+            if model == '<synthetic>':
+                continue
+            split = u.get('cache_creation') or {}
+            hour = split.get('ephemeral_1h_input_tokens') or 0
+            charge(model,
+                   fresh=u.get('input_tokens') or 0,
+                   cache_read=u.get('cache_read_input_tokens') or 0,
+                   cache_write=(u.get('cache_creation_input_tokens') or 0)
+                   - hour,
+                   cache_write_1h=hour,
+                   output=u.get('output_tokens') or 0)
+
+
+def pi():
+    """Pi and omp price every reply themselves."""
+    global usd_exact
+    for record in lines(path, 0, (b'"assistant"', b'"usage"')):
+        message = record.get('message') or {}
+        if record.get('type') != 'message' or \
+                message.get('role') != 'assistant':
+            continue
+        u = message.get('usage') or {}
+        cost = u.get('cost')
+        if isinstance(cost, dict) and isinstance(cost.get('total'),
+                                                 (int, float)):
+            usd_exact += cost['total']
+        else:
+            charge(message.get('model') or '',
+                   fresh=u.get('input') or 0,
+                   cache_read=u.get('cacheRead') or 0,
+                   cache_write=u.get('cacheWrite') or 0,
+                   output=u.get('output') or 0,
+                   provider=message.get('provider') or '')
+
+
+def opencode():
+    """OpenCode prices every reply in its database; the transcript is a
+    mirror named after the session."""
+    global usd_exact
+    sid = os.path.basename(path)[:-len('.jsonl')]
+    db = sqlite3.connect('file:%s?mode=ro' % os.path.expanduser(
+        '~/.local/share/opencode/opencode.db'), uri=True, timeout=5)
+    for (data,) in db.execute(
+            'select data from message where session_id = ?', (sid,)):
+        try:
+            message = json.loads(data)
+        except ValueError:
+            continue
+        if message.get('role') == 'assistant':
+            usd_exact += float(message.get('cost') or 0)
+
+
+def codex():
+    """Codex keeps a running token count; each rise goes to the model the
+    turn was on."""
+    model, last = '', None
+    for record in lines(path, 0, (b'"type":"t',)):
+        payload = record.get('payload') or {}
+        if record.get('type') == 'turn_context':
+            model = payload.get('model') or model
+            continue
+        info = payload.get('info')
+        if payload.get('type') != 'token_count' or not isinstance(info, dict):
+            continue
+        total = info.get('total_token_usage')
+        if not isinstance(total, dict):
+            continue
+        keys = ('input_tokens', 'cached_input_tokens', 'output_tokens')
+        now = {k: total.get(k) or 0 for k in keys}
+        if last is None or any(now[k] < last[k] for k in keys):
+            rise = now
+        else:
+            rise = {k: now[k] - last[k] for k in keys}
+        last = now
+        charge(model,
+               fresh=rise['input_tokens'] - rise['cached_input_tokens'],
+               cache_read=rise['cached_input_tokens'],
+               output=rise['output_tokens'])
+
+
+def muse():
+    muse_prices()
+    for record in lines(path, 0, (b'"model_completed"',)):
+        event = ((record.get('payload') or {}).get('event')) or {}
+        if event.get('kind') != 'model_completed':
+            continue
+        u = event.get('usage') or {}
+        # The same cached count, under either name.
+        cached = max(u.get('cached_tokens') or 0,
+                     u.get('cache_read_tokens') or 0)
+        charge(event.get('model') or '',
+               fresh=max(0, (u.get('input_tokens') or 0) - cached),
+               cache_read=cached,
+               cache_write=u.get('cache_write_tokens') or 0,
+               output=u.get('output_tokens') or 0)
+
+
+{'claude': claude, 'pi': pi, 'omp': pi, 'opencode': opencode,
+ 'codex': codex, 'muse': muse}.get(agent, lambda: None)()
+print(json.dumps({'usd': usd_exact + usd_estimated,
+                  'estimated': usd_estimated > 0,
+                  'unpriced': sorted(unpriced)}))''';
+
   static const _modelsPython = r'''import json, os, re, subprocess, sys
 # Prints one JSON list of {id, label, detail, context, efforts} for the agent
 # named in argv[1]; efforts are the levels the model can be asked to think at.
@@ -3834,6 +4359,52 @@ class _PendingSend {
   final DateTime at = DateTime.now();
 
   _PendingSend(this.text, this.turnsAtSend);
+}
+
+/// What a session has cost, in dollars at API rates: written by the agent,
+/// or — [estimated] — its tokens priced from a public table. Models the
+/// table does not list are [unpriced] and left out of [usd].
+class SessionCost {
+  final double usd;
+  final bool estimated;
+  final List<String> unpriced;
+  final DateTime at;
+
+  SessionCost({
+    required this.usd,
+    this.estimated = false,
+    this.unpriced = const [],
+    DateTime? at,
+  }) : at = at ?? DateTime.now();
+
+  /// The script's answer: its last line, JSON.
+  static SessionCost? parse(String output) {
+    final line = output.trim().split('\n').last;
+    try {
+      final m = jsonDecode(line);
+      if (m is! Map || m['usd'] is! num) return null;
+      return SessionCost(
+        usd: (m['usd'] as num).toDouble(),
+        estimated: m['estimated'] == true,
+        unpriced: [for (final u in (m['unpriced'] as List? ?? [])) '$u'],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// "$12.34", "≈ $750", or why there is no figure.
+  String get label {
+    if (usd <= 0 && unpriced.isNotEmpty) return 'cost unknown';
+    final amount = usd == 0
+        ? r'$0'
+        : usd < 0.01
+            ? r'<$0.01'
+            : usd < 100
+                ? '\$${usd.toStringAsFixed(2)}'
+                : '\$${usd.round()}';
+    return '${estimated ? '≈ ' : ''}$amount${unpriced.isEmpty ? '' : '+'}';
+  }
 }
 
 /// A model an agent can run on: the id its flag and command take, and what

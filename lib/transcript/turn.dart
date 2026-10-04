@@ -296,3 +296,36 @@ String attachmentName(String remotePath) {
 /// input tokens that request carried — so the latest one is the context in
 /// use, not a running total. A compaction shows up by itself: the next call
 /// is small.
+class ContextUsage {
+  /// Input tokens of the latest call, cached ones included.
+  final int used;
+
+  /// The model that call went to, as the agent wrote it.
+  final String model;
+
+  /// The model's context window, when the agent writes it alongside.
+  final int? window;
+
+  /// How hard the model was asked to think — "high", "medium" — when the
+  /// agent records it.
+  final String? effort;
+
+  const ContextUsage(
+      {required this.used, required this.model, this.window, this.effort});
+
+  Map<String, dynamic> toMap() => {
+        'used': used,
+        'model': model,
+        if (window != null) 'window': window,
+        if (effort != null) 'effort': effort,
+      };
+
+  static ContextUsage? fromMap(Object? m) => m is Map && m['used'] is num
+      ? ContextUsage(
+          used: (m['used'] as num).toInt(),
+          model: (m['model'] as String?) ?? '',
+          window: (m['window'] as num?)?.toInt(),
+          effort: m['effort'] as String?,
+        )
+      : null;
+}

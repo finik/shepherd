@@ -18,6 +18,13 @@ import 'turn.dart';
 /// wrapped in tags, which is what tells them apart.
 class CodexAdapter implements TranscriptAdapter {
   @override
+  ContextUsage? usage;
+
+  /// The model the current turn runs on, from its turn context.
+  String _model = '';
+  String? _effort;
+
+  @override
   final List<Turn> turns = [];
   @override
   int baseOffset = 0;
@@ -41,6 +48,34 @@ class CodexAdapter implements TranscriptAdapter {
         bytes: (r['__bytes'] as num?)?.toInt() ?? 0,
       ));
       return true;
+    }
+    // Codex reports the context itself, window included, after each call.
+    if (r['type'] == 'turn_context' && r['payload'] is Map) {
+      final p = r['payload'] as Map;
+      _model = (p['model'] as String?) ?? _model;
+      final mode = p['collaboration_mode'];
+      final settings = mode is Map ? mode['settings'] : null;
+      // Unset means the model's own default, which Codex does not name.
+      _effort = (p['effort'] ??
+          (settings is Map ? settings['reasoning_effort'] : null)) as String?;
+      return false;
+    }
+    if (r['type'] == 'event_msg' && r['payload'] is Map) {
+      final p = r['payload'] as Map;
+      final info = p['info'];
+      if (p['type'] == 'token_count' && info is Map) {
+        final last = info['last_token_usage'];
+        final used = last is Map ? (last['input_tokens'] as num?)?.toInt() : null;
+        if (used != null && used > 0) {
+          usage = ContextUsage(
+            used: used,
+            model: _model,
+            window: (info['model_context_window'] as num?)?.toInt(),
+            effort: _effort,
+          );
+        }
+      }
+      return false;
     }
     if (r['type'] != 'response_item') return false;
     final payload = r['payload'];

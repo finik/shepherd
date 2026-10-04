@@ -14,6 +14,8 @@ import '../state/app_state.dart';
 import '../state/uploads.dart';
 import 'agent_glyph.dart';
 import 'blocked_prompt.dart';
+import 'context_pie.dart';
+import 'model_dialog.dart';
 import '../transcript/turn.dart';
 import 'design.dart';
 import 'turn_detail_screen.dart';
@@ -39,6 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
     widget.state.chatVisible = true;
     _scroll.addListener(_onScroll);
   }
+
 
   @override
   void dispose() {
@@ -116,7 +119,9 @@ class _ChatScreenState extends State<ChatScreen> {
     // screen without changing a single turn.
     final pictures = 'p${state.thumbsArrived}';
     // Earlier history being fetched, or none left to fetch.
-    final older = 'o${state.loadingOlder ? 1 : 0}${state.hasOlder ? 1 : 0}';
+    final older = 'o${state.loadingOlder ? 1 : 0}${state.hasOlder ? 1 : 0}'
+        'c${((state.contextFraction ?? -1) * 100).round()}'
+        'm${_modelLine(state)}';
     final turns = state.turns;
     if (turns.isEmpty) return '0$sending$pictures$older';
     final last = turns.last;
@@ -194,7 +199,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              '~/${pane?.shortCwd ?? ''}',
+                              pane?.shortCwd ?? '',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: d.meta.copyWith(fontSize: 11, color: d.ink3),
@@ -210,22 +215,62 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
             ),
-            // The whole right edge opens the menu, not only the glyph, and it
-            // is its own target rather than a spot inside the back one.
-            GestureDetector(
-              key: const ValueKey('chat-menu'),
-              behavior: HitTestBehavior.opaque,
-              onTap: () => _openMenu(pane),
-              child: SizedBox(
-                width: 56,
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Icon(Icons.more_vert, size: 22, color: d.ink2),
-                  ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (state.contextFraction case final fraction?)
+                      GestureDetector(
+                        key: const ValueKey('context-pie'),
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _showContext(pane),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 4, 8),
+                          child: ContextPie(fraction: fraction, size: 20),
+                        ),
+                      ),
+                    // Its own target rather than a spot inside the back one.
+                    GestureDetector(
+                      key: const ValueKey('chat-menu'),
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _openMenu(pane),
+                      child: SizedBox(
+                        width: 48,
+                        height: 42,
+                        child: Align(
+                          alignment: Alignment.topCenter,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 10),
+                            child: Icon(Icons.more_vert, size: 22, color: d.ink2),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
+                if (_modelLine(state) case final line?)
+                  GestureDetector(
+                    key: const ValueKey('model-line'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: pane != null && AppState.canSwitchModel(pane.agent)
+                        ? () => _chooseModel(pane)
+                        : null,
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(12, 0, pad, 12),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: Text(
+                          line,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: d.meta.copyWith(fontSize: 11, color: d.ink3),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ],
         ),
@@ -323,6 +368,177 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     ),
   );
+
+  /// "sonnet-4-6 · high" — the model the agent last called, and how hard it
+  /// was asked to think when the agent records that.
+  static String? _modelLine(AppState state) {
+    final usage = state.contextUsage;
+    if (usage == null || usage.model.isEmpty) return null;
+    // The glyph beside the title already says whose model it is.
+    final model = usage.model.startsWith('claude-')
+        ? usage.model.substring('claude-'.length)
+        : usage.model;
+    final effort = usage.effort;
+    return effort == null || effort.isEmpty ? model : '$model · $effort';
+  }
+
+  /// The session's cost.
+  Widget _cost(D d, AppState state, {Key? key, required TextStyle style}) =>
+      Text(_costLine(state) ?? '', key: key, style: style);
+
+  /// "≈ $750 at API rates" — what the session has cost so far.
+  static String? _costLine(AppState state) {
+    final cost = state.sessionCost;
+    if (cost == null) return state.costLoading ? 'cost …' : null;
+    return cost.label == 'cost unknown'
+        ? cost.label
+        : '${cost.label} at API rates';
+  }
+
+  /// The context pie's details, and a way to compact from there.
+  Future<void> _showContext(Pane? pane) async {
+    if (pane == null) return;
+    final d = D.of(context);
+    final state = widget.state;
+    final usage = state.contextUsage;
+    final fraction = state.contextFraction;
+    final window = state.contextWindow;
+    if (usage == null || fraction == null || window == null) return;
+    unawaited(state.refreshCost());
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: d.ground,
+        title: Row(children: [
+          ContextPie(fraction: fraction, size: 22),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text('Context ${(fraction * 100).round()}% full',
+                style: d.rowTitle),
+          ),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+                '${tokenCount(usage.used)} of ${tokenCount(window)} tokens'
+                '${state.contextWindowAssumed ? ' (window assumed)' : ''}',
+                style: d.prose.copyWith(fontSize: 15)),
+            if (usage.model.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(usage.model, style: d.label.copyWith(color: d.ink3)),
+            ],
+            const SizedBox(height: 6),
+            ListenableBuilder(
+              listenable: state,
+              builder: (context, _) => Align(
+                alignment: Alignment.centerLeft,
+                child: _cost(d, state,
+                    key: const ValueKey('context-cost'),
+                    style: d.label.copyWith(color: d.ink2)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+                'As of the agent’s latest model call. Compacting summarises '
+                'the conversation so far to free up room; clearing starts '
+                'over with none of it.',
+                style: d.prose.copyWith(fontSize: 13, color: d.ink3)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('CLOSE'),
+          ),
+          TextButton(
+            key: const ValueKey('context-clear'),
+            onPressed: () => Navigator.of(dialogContext).pop('clear'),
+            child: const Text('CLEAR'),
+          ),
+          TextButton(
+            key: const ValueKey('context-compact'),
+            onPressed: () => Navigator.of(dialogContext).pop('compact'),
+            child: const Text('COMPACT'),
+          ),
+        ],
+      ),
+    );
+    if (action == 'compact') await _confirmCompact(pane);
+    if (action == 'clear') await _confirmClear(pane);
+  }
+
+  Future<bool> _confirm(String title, String body, String action) async {
+    final d = D.of(context);
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            backgroundColor: d.ground,
+            title: Text(title, style: d.rowTitle),
+            content: Text(body, style: d.prose.copyWith(fontSize: 15)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('CANCEL'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(action, style: TextStyle(color: d.accentText)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _confirmCompact(Pane pane) async {
+    if (await _confirm(
+        'Compact ${pane.sessionName}?',
+        'The agent replaces the conversation it is holding with a summary of '
+            'it. The full conversation stays in its transcript.',
+        'COMPACT')) {
+      await widget.state.compact(pane);
+    }
+  }
+
+  Future<void> _confirmClear(Pane pane) async {
+    if (await _confirm(
+        'Clear ${pane.sessionName}?',
+        'The agent starts a new conversation with nothing in context. The old '
+            'one stays in its transcript on the host.',
+        'CLEAR')) {
+      await widget.state.clearContext(pane);
+    }
+  }
+
+  /// Switch the agent to another of its models, another effort, or both.
+  Future<void> _chooseModel(Pane pane) async {
+    final state = widget.state;
+    final messenger = ScaffoldMessenger.of(context);
+    final models = state.listModels(pane.agent ?? '');
+    final picked = await showDialog<ModelChoice>(
+      context: context,
+      builder: (_) => ModelDialog(
+        agent: pane.agent,
+        models: models,
+        currentModel: state.contextUsage?.model,
+        currentEffort: state.contextUsage?.effort,
+      ),
+    );
+    if (picked == null || (picked.model == null && picked.effort == null)) {
+      return;
+    }
+    final ok = await state.switchModel(pane,
+        model: picked.model, effort: picked.effort, options: await models);
+    final what = [
+      if (picked.model != null) picked.model!.label,
+      if (picked.effort != null) '${picked.effort} effort',
+    ].join(', ');
+    messenger.showSnackBar(SnackBar(
+        content: Text(ok ? 'Switching to $what' : 'Could not switch to $what')));
+  }
+
   /// Ends the agent and closes its pane on the host, after saying so: this
   /// is the one thing in the menu that cannot be taken back from the phone.
   Future<void> _close(Pane pane) async {

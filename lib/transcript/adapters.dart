@@ -19,6 +19,9 @@ abstract class TranscriptAdapter {
 
   List<Turn> get turns;
 
+  /// How full the context was at the agent's latest model call.
+  ContextUsage? usage;
+
   /// Start numbering turns from [from], so ids stay unique when a parse
   /// continues an earlier one.
   void seed(int from);
@@ -351,6 +354,9 @@ TurnStep? _taskNotice(String text) {
 
 class ClaudeAdapter implements TranscriptAdapter {
   @override
+  ContextUsage? usage;
+
+  @override
   final List<Turn> turns = [];
   @override
   int baseOffset = 0;
@@ -376,6 +382,23 @@ class ClaudeAdapter implements TranscriptAdapter {
     final msg = r['message'];
     if (msg is! Map) return false;
     final role = msg['role'] as String?;
+    // A subagent's calls fill its own context, not this one.
+    if (role == 'assistant' && r['isSidechain'] != true) {
+      final u = msg['usage'];
+      if (u is Map) {
+        int n(String key) => (u[key] as num?)?.toInt() ?? 0;
+        final used = n('input_tokens') +
+            n('cache_read_input_tokens') +
+            n('cache_creation_input_tokens');
+        if (used > 0) {
+          usage = ContextUsage(
+            used: used,
+            model: (msg['model'] as String?) ?? '',
+            effort: r['effort'] as String?,
+          );
+        }
+      }
+    }
     final failure = _errorMessage(msg);
     if (failure != null && turns.isNotEmpty) {
       turns.last.steps.add(Failure(failure));
@@ -495,6 +518,12 @@ class ClaudeAdapter implements TranscriptAdapter {
 
 class PiAdapter implements TranscriptAdapter {
   @override
+  ContextUsage? usage;
+
+  /// The thinking level last set, which holds until it is changed.
+  String? _thinking;
+
+  @override
   final List<Turn> turns = [];
   @override
   int baseOffset = 0;
@@ -513,10 +542,36 @@ class PiAdapter implements TranscriptAdapter {
       ));
       return true;
     }
+    if (r['type'] == 'thinking_level_change') {
+      _thinking = r['thinkingLevel'] as String? ?? _thinking;
+      final u = usage;
+      if (u != null) {
+        usage = ContextUsage(
+            used: u.used, model: u.model, window: u.window, effort: _thinking);
+      }
+      return false;
+    }
     if (r['type'] != 'message') return false;
     final msg = r['message'];
     if (msg is! Map) return false;
     final role = msg['role'] as String?;
+    if (role == 'assistant') {
+      final u = msg['usage'];
+      if (u is Map) {
+        int n(String key) => (u[key] as num?)?.toInt() ?? 0;
+        final used = n('input') + n('cacheRead') + n('cacheWrite');
+        // A failed call records zeros; it says nothing about the context.
+        if (used > 0) {
+          usage = ContextUsage(
+            used: used,
+            model: (msg['model'] as String?) ?? '',
+            // A follow starts on a fresh adapter; what the window found
+            // still holds.
+            effort: _thinking ?? usage?.effort,
+          );
+        }
+      }
+    }
     final failure = _errorMessage(msg);
     if (failure != null && turns.isNotEmpty) {
       turns.last.steps.add(Failure(failure));
@@ -737,6 +792,7 @@ List<Map<String, dynamic>> parseTranscript(Map<String, String> request) {
     adapter.addRecord(record);
   }
   final turns = adapter.turns;
+  final usage = adapter.usage;
   // Only the tail is worth keeping: older turns cost memory and layout time
   // for history nobody scrolls back to on a phone.
   const keep = 80;
@@ -748,13 +804,22 @@ List<Map<String, dynamic>> parseTranscript(Map<String, String> request) {
         'userText': t.userText,
         // Carry the host's thumbnails across, so they are not fetched again.
         'steps': [for (final step in t.steps) step.toMap(withThumb: true)],
-      }
+      },
+    // Last, and only when there is one; turnsFromMaps passes over it.
+    if (usage != null) {'__usage': usage.toMap()},
   ];
 }
+
+/// The context use the isolate sent back with the turns, if any.
+ContextUsage? usageFromMaps(List<Map<String, dynamic>> maps) =>
+    maps.isNotEmpty && maps.last.containsKey('__usage')
+        ? ContextUsage.fromMap(maps.last['__usage'])
+        : null;
 
 /// Rebuilds [Turn]s from what the isolate sent back.
 List<Turn> turnsFromMaps(List<Map<String, dynamic>> maps) => [
       for (final m in maps)
+        if (!m.containsKey('__usage'))
         Turn(id: m['id'] as String, userText: m['userText'] as String)
           ..steps.addAll([
             for (final step in (m['steps'] as List))

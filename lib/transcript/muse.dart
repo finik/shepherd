@@ -19,6 +19,9 @@ import 'turn.dart';
 /// files of its own, and is not part of the conversation.
 class MuseAdapter implements TranscriptAdapter {
   @override
+  ContextUsage? usage;
+
+  @override
   final List<Turn> turns = [];
   @override
   int baseOffset = 0;
@@ -54,6 +57,14 @@ class MuseAdapter implements TranscriptAdapter {
             id: 'm${_seq++}',
             userText: clampBlock(withoutWrappers(prompt.trim()), max: 4000)));
         return true;
+      case 'model_completed':
+        final u = event['usage'];
+        final used = u is Map ? (u['input_tokens'] as num?)?.toInt() : null;
+        if (used != null && used > 0) {
+          usage = ContextUsage(
+              used: used, model: (event['model'] as String?) ?? '');
+        }
+        return false;
       case 'assistant_message_committed':
         final text = event['text'];
         if (turns.isEmpty || text is! String || text.trim().isEmpty) {
