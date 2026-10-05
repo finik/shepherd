@@ -19,7 +19,12 @@ class BlockedPrompt extends StatefulWidget {
   /// Called with the option's number, which is the key the menu is waiting for.
   final void Function(int choice) onAnswer;
 
-  const BlockedPrompt({super.key, required this.asked, required this.onAnswer});
+  /// For a question that takes several answers: called with the numbers of
+  /// every option to leave ticked.
+  final void Function(Set<int> ticked)? onChecks;
+
+  const BlockedPrompt(
+      {super.key, required this.asked, required this.onAnswer, this.onChecks});
 
   @override
   State<BlockedPrompt> createState() => _BlockedPromptState();
@@ -27,6 +32,19 @@ class BlockedPrompt extends StatefulWidget {
 
 class _BlockedPromptState extends State<BlockedPrompt> {
   int _at = 0;
+
+  /// The boxes ticked on the phone, by option number; starts as the screen
+  /// has them.
+  Set<int> _ticked = {};
+
+  bool get _boxes =>
+      widget.onChecks != null &&
+      widget.asked.choices.any((c) => c.checked != null);
+
+  Set<int> get _tickedOnScreen => {
+        for (var i = 0; i < widget.asked.choices.length; i++)
+          if (widget.asked.choices[i].checked == true) i + 1
+      };
 
   /// Open on the option the agent's cursor is on, which is what Enter at the
   /// desktop would have picked.
@@ -39,6 +57,7 @@ class _BlockedPromptState extends State<BlockedPrompt> {
   void initState() {
     super.initState();
     _at = _start;
+    _ticked = _tickedOnScreen;
   }
 
   @override
@@ -46,7 +65,10 @@ class _BlockedPromptState extends State<BlockedPrompt> {
     super.didUpdateWidget(old);
     // A new question is a new set of answers; staying on option three of the
     // last one is how you agree to something you never read.
-    if (old.asked.question != widget.asked.question) _at = _start;
+    if (old.asked.question != widget.asked.question) {
+      _at = _start;
+      _ticked = _tickedOnScreen;
+    }
   }
 
   @override
@@ -54,6 +76,7 @@ class _BlockedPromptState extends State<BlockedPrompt> {
     final d = D.of(context);
     final choices = widget.asked.choices;
     if (choices.isEmpty) return _panel(d, const []);
+    if (_boxes) return _checklist(d, choices);
     final at = _at.clamp(0, choices.length - 1);
     return _panel(d, [
       const SizedBox(height: 12),
@@ -126,6 +149,77 @@ class _BlockedPromptState extends State<BlockedPrompt> {
           color: d.ground,
           alignment: Alignment.center,
           child: Text('OK',
+              style: d.label.copyWith(fontSize: 15, color: d.accentField)),
+        ),
+      ),
+    ]);
+  }
+
+  /// Several answers at once: every box on screen, ticked on the phone, and
+  /// one button that ticks them in the agent and moves on to what it asks
+  /// next.
+  Widget _checklist(D d, List<Choice> choices) {
+    return _panel(d, [
+      const SizedBox(height: 8),
+      for (var i = 0; i < choices.length; i++)
+        if (choices[i].checked != null && !choices[i].typed)
+          InkWell(
+            key: ValueKey('check-${i + 1}'),
+            onTap: () => setState(() => _ticked.contains(i + 1)
+                ? _ticked.remove(i + 1)
+                : _ticked.add(i + 1)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 20,
+                    height: 20,
+                    margin: const EdgeInsets.only(top: 1, right: 12),
+                    decoration: BoxDecoration(
+                      color: _ticked.contains(i + 1) ? d.ground : null,
+                      border: Border.all(color: d.ground, width: 2),
+                    ),
+                    child: _ticked.contains(i + 1)
+                        ? Icon(Icons.check, size: 14, color: d.accentField)
+                        : null,
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(choices[i].label,
+                            style: d.label
+                                .copyWith(fontSize: 13, color: d.ground)),
+                        if (choices[i].detail.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            choices[i].detail,
+                            style: d.prose.copyWith(
+                              fontSize: 13,
+                              height: 1.35,
+                              color: d.ground.withValues(alpha: 0.88),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      const SizedBox(height: 12),
+      InkWell(
+        key: const ValueKey('checks-next'),
+        onTap: () => widget.onChecks!(Set.of(_ticked)),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 15),
+          color: d.ground,
+          alignment: Alignment.center,
+          child: Text('NEXT',
               style: d.label.copyWith(fontSize: 15, color: d.accentField)),
         ),
       ),

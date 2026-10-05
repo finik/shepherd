@@ -168,6 +168,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     asked: asked,
                     onAnswer: (choice) =>
                         state.answerPrompt(pane.paneId, choice),
+                    onChecks: (ticked) =>
+                        state.answerChecks(pane.paneId, ticked),
                   ),
             if (_activity(state) case final activity?)
               _activityLine(d, activity, pad),

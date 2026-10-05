@@ -1,0 +1,36 @@
+
+[0m[38;5;174m ▐[0m[38;5;174m[48;5;16m▛███▛█   [0m[1mClaude Code [0m[38;5;246mv2.1.289[0m
+[0m[38;5;174m▝▜[0m[38;5;174m[48;5;16m█████[0m[38;5;174m█▀  [0m[38;5;246mHaiku 4.5 · Claude Max[0m
+[0m[38;5;174m ▝▝   ▝▝   [0m[38;5;246m~/shepherd-demo/notes[0m
+
+
+[0m[38;5;246m[48;5;237m❯ [0m[38;5;231m[48;5;237mUse your question tool once to ask me two questions together: first 'Which fruits?' as a multi-select with options [0m[48;5;237m  [0m
+[0m[48;5;237m  [0m[38;5;231m[48;5;237mApple, Banana, Cherry; second 'Which drink?' single-select with options Tea, Coffee. Then tell me exactly what I [0m[48;5;237m    [0m
+[0m[48;5;237m  [0m[38;5;231m[48;5;237manswered.[0m[48;5;237m                                                                                                            [0m
+
+[0m[38;5;246m⏺ [0mUser answered Claude's questions:
+[0m[38;5;246m  ⎿  · Which fruits? → Apple, Cherry[0m
+     [0m[38;5;246m· Which drink? → Tea[0m
+
+[0m[38;5;231m⏺ [0mYou answered:
+  - [0m[1mWhich fruits? [0mApple, Cherry
+  - [0m[1mWhich drink? [0mTea
+
+[0m[38;5;246m✻ Sautéed for 4s · done 9:44 PM[0m
+
+[0m[38;5;246m[48;5;237m❯ [0m[38;5;231m[48;5;237mAsk me the same two questions again with your question tool.[0m[48;5;237m                                                         [0m
+
+[0m[38;5;246m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+←  ☒ Fruits  ☒ Drink [0m[38;5;16m[48;5;153m ✔ Submit [0m[38;5;246m →[0m
+
+[0m[1m[38;5;231mReview your answers[0m
+
+ ● Which fruits?
+   [0m[38;5;114m→ Apple[0m
+ ● Which drink?
+   [0m[38;5;114m→ Tea[0m
+
+[0m[38;5;246mReady to submit your answers?[0m
+
+[0m[38;5;153m❯[0m [0m[38;5;246m1. [0m[38;5;153mSubmit answers[0m
+  [0m[38;5;246m2. [0mCancel

@@ -37,19 +37,30 @@ class Choice {
   /// Reject" — are moved between with left and right rather than up and down.
   final bool sideways;
 
+  /// A box to tick, when the question takes several answers: whether it is
+  /// ticked now. Null for an option that is simply picked.
+  final bool? checked;
+
   const Choice({
     required this.label,
     this.detail = '',
     this.selected = false,
     this.sideways = false,
+    this.checked,
   });
+
+  /// "Type something": a tickable answer that is written rather than chosen.
+  bool get typed => RegExp(r'^Type something\.?$').hasMatch(label);
 
   @override
   bool operator ==(Object other) =>
-      other is Choice && other.label == label && other.detail == detail;
+      other is Choice &&
+      other.label == label &&
+      other.detail == detail &&
+      other.checked == checked;
 
   @override
-  int get hashCode => Object.hash(label, detail);
+  int get hashCode => Object.hash(label, detail, checked);
 
   @override
   String toString() =>
@@ -2897,9 +2908,19 @@ if found:
       if (match == null) continue;
       if (int.parse(match.group(1)!) != choices.length + 1) continue;
       if (choices.isEmpty) menuStart = i;
+      // Claude asks for several answers with a box before each: "[ ] Apple",
+      // "[✔] Cherry".
+      var label = _withoutKeyHint(match.group(2)!.trim());
+      bool? checked;
+      final box = RegExp(r'^\[([ ✔✓xX×])\]\s+').firstMatch(label);
+      if (box != null) {
+        checked = box.group(1) != ' ';
+        label = label.substring(box.end);
+      }
       choices.add(Choice(
-        label: _withoutKeyHint(match.group(2)!.trim()),
+        label: label,
         selected: RegExp(r'^\s*[❯›>▸▶→]').hasMatch(lines[i]),
+        checked: checked,
       ));
       // Claude writes the explanation under the option, indented. It is the
       // only place that text exists, and it is what tells you what you are
@@ -2914,6 +2935,9 @@ if found:
         // rules: a box edge below the last option is not its description.
         final indent = next.length - next.trimLeft().length;
         if (indent < 4 || _chrome(trimmed)) break;
+        // Below the boxes, "Next" moves on to the following question; it is a
+        // control, not something the last option says.
+        if (choices.last.checked != null && trimmed == 'Next') break;
         // A label too long for its column wraps, and what wraps is usually
         // "(Recommended)". That is part of the option's name, not what the
         // agent had to say about it.
@@ -2921,6 +2945,7 @@ if found:
           choices[choices.length - 1] = Choice(
             label: '${choices.last.label} $trimmed',
             selected: choices.last.selected,
+            checked: choices.last.checked,
           );
           i = j;
           continue;
@@ -2933,6 +2958,7 @@ if found:
           label: choices.last.label,
           detail: detail.join(' '),
           selected: choices.last.selected,
+          checked: choices.last.checked,
         );
       }
     }
@@ -2965,8 +2991,24 @@ if found:
       if (_chrome(trimmed) || _endsBlock(trimmed)) break;
       block.insert(0, trimmed);
     }
-    final at = block.indexWhere((l) => l.endsWith('?'));
+    // Claude ends a set of questions with a review — each question, then
+    // what was answered — before "Ready to submit your answers?". The
+    // answers are what is being submitted, so they go with it.
+    final review = block.indexOf('Review your answers');
+    final at = review >= 0
+        ? block.lastIndexWhere((l) => l.endsWith('?'))
+        : block.indexWhere((l) => l.endsWith('?'));
     if (at < 0) return (question: '', choices: choices);
+    if (review >= 0 && at > review) {
+      final answers = [
+        for (final l in block.sublist(review + 1, at))
+          l.replaceFirst(RegExp(r'^[●•]\s*'), '')
+      ];
+      return (
+        question: '${answers.join('\n')}\n${block[at]}',
+        choices: choices
+      );
+    }
     // A command waiting for approval is the thing being agreed to; it goes
     // with the question rather than being left behind on the desktop.
     final command = block
@@ -3230,13 +3272,58 @@ if found:
     ];
   }
 
+  /// The keys that leave exactly [wanted] ticked — option numbers, counted
+  /// from one — in a question that takes several answers, and then move on.
+  /// Enter ticks or unticks the box under the cursor, so only the boxes that
+  /// differ are visited; "Next" sits just below the last box.
+  @visibleForTesting
+  static List<String> checkKeys(
+      ({String question, List<Choice> choices})? asked, Set<int> wanted) {
+    final choices = asked?.choices ?? const <Choice>[];
+    final boxes = [
+      for (var i = 0; i < choices.length; i++)
+        if (choices[i].checked != null) i
+    ];
+    if (boxes.isEmpty) return const [];
+    var at = choices.indexWhere((c) => c.selected);
+    if (at < 0) at = boxes.first;
+    final keys = <String>[];
+    void moveTo(int to) {
+      for (; at < to; at++) {
+        keys.add('down');
+      }
+      for (; at > to; at--) {
+        keys.add('up');
+      }
+    }
+
+    for (final i in boxes) {
+      // A written answer cannot be given from here.
+      if (choices[i].typed) continue;
+      if (wanted.contains(i + 1) != choices[i].checked) {
+        moveTo(i);
+        keys.add('enter');
+      }
+    }
+    moveTo(boxes.last + 1);
+    keys.add('enter');
+    return keys;
+  }
+
   /// Answer a question by moving to its option and pressing Enter.
-  Future<void> answerPrompt(String paneId, int choice) async {
+  Future<void> answerPrompt(String paneId, int choice) =>
+      _answerWith(paneId, menuKeys(_blockedPrompts[paneId], choice));
+
+  /// Answer a question that takes several answers: tick [wanted], then Next.
+  Future<void> answerChecks(String paneId, Set<int> wanted) =>
+      _answerWith(paneId, checkKeys(_blockedPrompts[paneId], wanted));
+
+  Future<void> _answerWith(String paneId, List<String> keys) async {
     touchActivity();
     try {
       // One key at a time: OpenCode drops a second arrow that arrives in the
       // same burst, and the cursor stops one short of the answer.
-      for (final key in menuKeys(_blockedPrompts[paneId], choice)) {
+      for (final key in keys) {
         await _rpc?.sendKeys(paneId, [key]);
         await Future<void>.delayed(const Duration(milliseconds: 120));
       }
