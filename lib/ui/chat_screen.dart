@@ -17,7 +17,6 @@ import 'agent_glyph.dart';
 import 'blocked_prompt.dart';
 import 'context_pie.dart';
 import 'model_dialog.dart';
-import 'preview_screen.dart';
 import 'quotas_screen.dart';
 import '../transcript/turn.dart';
 import 'design.dart';
@@ -425,8 +424,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _preview(Uri url) => Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => PreviewScreen(state: widget.state, url: url)));
+  void _preview(Uri url) => widget.state.openPage(url);
 
   /// The web servers on the host, the agent's own first, and a port to type
   /// for one that is not listed.

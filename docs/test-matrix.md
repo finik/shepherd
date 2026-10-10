@@ -129,4 +129,5 @@ real device's Doze.
 | 49 | Menu → Web pages on the host | Servers listed, the agent's folder first; a typed port opens too |
 | 50 | Open in the browser from the page | Chrome shows the same page while Shepherd is connected |
 | 51 | Port with nothing listening | Says nothing came back from that port, not a blank page |
-
+| 52 | Put the page away, use the chat, pull the lip | The page comes back as it was, scroll and inputs intact |
+| 53 | Back button with the page out | Back in the page first, then the page is put away, not closed |

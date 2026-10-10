@@ -9,6 +9,7 @@ import 'dart:async';
 import 'state/app_state.dart';
 import 'state/push.dart';
 import 'state/machines.dart';
+import 'ui/page_drawer.dart';
 import 'ui/sessions_screen.dart';
 import 'ui/design.dart';
 
@@ -56,6 +57,7 @@ class ShepherdApp extends StatefulWidget {
 
 class _ShepherdAppState extends State<ShepherdApp> with WidgetsBindingObserver {
   final _state = AppState();
+  final _navigator = GlobalKey<NavigatorState>();
   final _store = MachineStore();
   ThemeMode _themeMode = ThemeMode.system;
 
@@ -143,6 +145,10 @@ class _ShepherdAppState extends State<ShepherdApp> with WidgetsBindingObserver {
       darkTheme: D.theme(Brightness.dark),
       themeMode: _themeMode,
       scrollBehavior: const NoStretchScrollBehavior(),
+      navigatorKey: _navigator,
+      // A page from the host stays open over every screen.
+      builder: (context, child) =>
+          PageDrawer(state: _state, navigator: _navigator, child: child!),
       home: SessionsScreen(
         state: _state,
         themeMode: _themeMode,

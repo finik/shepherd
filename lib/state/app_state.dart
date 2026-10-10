@@ -220,6 +220,30 @@ class AppState extends ChangeNotifier {
     }();
   }
 
+  /// The host page open on the phone, kept alive while the rest of the app
+  /// is used; [pageShown] while it is pulled out over the screen.
+  Uri? pageUrl;
+  bool pageShown = false;
+
+  void openPage(Uri url) {
+    pageUrl = url;
+    pageShown = true;
+    notifyListeners();
+  }
+
+  /// Slide the page out of the way, or back; it stays loaded either way.
+  void showPage(bool shown) {
+    if (pageUrl == null || pageShown == shown) return;
+    pageShown = shown;
+    notifyListeners();
+  }
+
+  void closePage() {
+    pageUrl = null;
+    pageShown = false;
+    notifyListeners();
+  }
+
   /// Web servers on the host, reached from the phone through the SSH
   /// connection.
   late final Tunnels tunnels = Tunnels(() => _ssh);

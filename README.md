@@ -179,9 +179,11 @@ started — `http://localhost:8787` — opens on the phone, and so does any othe
 server on the host, from the chat's menu: those started in the agent's folder
 first, or a port typed in. The page travels through the SSH connection the app
 already holds, the same way `ssh -L` would carry it; on the phone it listens
-only on the phone itself, and nothing on the host is exposed to the network. It
-opens in a browser inside the app, or in Chrome, which reaches it while
-Shepherd keeps the connection.
+only on the phone itself, and nothing on the host is exposed to the network. The
+page slides in over the app and stays loaded when it is put away: a small lip
+on the right edge brings it back as it was, from any screen, so the
+conversation and the page are a swipe apart. It also opens in Chrome, which
+reaches it while Shepherd keeps the connection.
 
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
 and dirty count for each agent's folder. More than one Herdr session on a host:

@@ -55,6 +55,22 @@ void main() {
     expect(found.first.here, isTrue);
   }, skip: Platform.isMacOS || Platform.isLinux ? false : 'needs lsof');
 
+  test('a page stays open when put away, until it is closed', () {
+    final state = AppState();
+    final url = Uri.parse('http://localhost:8787/');
+    state.openPage(url);
+    expect((state.pageUrl, state.pageShown), (url, true));
+    state.showPage(false);
+    expect((state.pageUrl, state.pageShown), (url, false));
+    state.showPage(true);
+    expect(state.pageShown, isTrue);
+    state.closePage();
+    expect((state.pageUrl, state.pageShown), (null, false));
+    // Nothing to show once closed.
+    state.showPage(true);
+    expect(state.pageShown, isFalse);
+  });
+
   testWidgets('the menu offers the host\'s pages', (tester) async {
     tester.view.physicalSize = const Size(1080, 2400);
     tester.view.devicePixelRatio = 3;
