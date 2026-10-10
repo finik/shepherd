@@ -120,3 +120,13 @@ real device's Doze.
 | 45 | Tap the bars, or the cost | Subscriptions screen with every plan's limits, and why any could not be read |
 | 46 | Host with neither | No bars; the cost is plain text |
 | 47 | App backgrounded and reconnected | Bars stay up while they are read again |
+
+## Web pages on the host
+
+| # | Case | Expected |
+|---|------|----------|
+| 48 | Agent prints `http://localhost:<port>` for a server it started | The link opens the page in the app, interactive |
+| 49 | Menu → Web pages on the host | Servers listed, the agent's folder first; a typed port opens too |
+| 50 | Open in the browser from the page | Chrome shows the same page while Shepherd is connected |
+| 51 | Port with nothing listening | Says nothing came back from that port, not a blank page |
+

@@ -11,6 +11,7 @@ import '../herdr/models.dart';
 import 'machines.dart';
 import 'push.dart';
 import 'transcript_cache.dart';
+import 'tunnels.dart';
 import 'updater.dart';
 import 'uploads.dart';
 import 'watch.dart';
@@ -218,6 +219,115 @@ class AppState extends ChangeNotifier {
       }
     }();
   }
+
+  /// Web servers on the host, reached from the phone through the SSH
+  /// connection.
+  late final Tunnels tunnels = Tunnels(() => _ssh);
+
+  /// [url] on the host, as the phone reaches it: the same path, through a
+  /// tunnel to its port. Null for anything that is not a host-local address.
+  Future<Uri?> openHostUrl(Uri url) async {
+    if (!isHostLocal(url)) return null;
+    final port = url.hasPort ? url.port : 80;
+    final local = await tunnels.open(port);
+    return url.replace(port: local);
+  }
+
+  /// Whether [url] points at the host itself — what an agent prints for a
+  /// server it started: `http://localhost:8787`, `http://127.0.0.1:5173/`.
+  static bool isHostLocal(Uri url) =>
+      (url.scheme == 'http' || url.scheme == 'https') &&
+      const {'localhost', '127.0.0.1', '0.0.0.0', '[::1]', '::1'}
+          .contains(url.host);
+
+  /// The servers listening on the host, those started in [pane]'s folder
+  /// first; null when the host could not be asked.
+  Future<List<HostPort>?> listPorts(Pane? pane) async {
+    final ssh = _ssh;
+    if (ssh == null) return null;
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        'python3 - ${_shellQuote(pane?.cwd ?? '')} <<\'SHEPHERD_PORTS\'\n'
+        '$_portsPython\nSHEPHERD_PORTS',
+        timeout: const Duration(seconds: 20),
+      );
+      final line = utf8
+          .decode(out, allowMalformed: true)
+          .split('\n')
+          .lastWhere((l) => l.startsWith('@@@'), orElse: () => '');
+      if (line.isEmpty) return null;
+      return HostPort.fromList(jsonDecode(line.substring(3)) as List);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @visibleForTesting
+  static String get portsScriptForTest => _portsPython;
+
+  static const _portsPython = r'''import json, os, subprocess, sys
+# Every TCP port listening on this machine, with the process behind it and
+# the folder it was started in; those under argv[1] are marked as the pane's.
+folder = os.path.realpath(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else ''
+try:
+    out = subprocess.run(['lsof', '-nP', '-iTCP', '-sTCP:LISTEN', '-Fpcn'],
+                         capture_output=True, text=True, timeout=10).stdout
+except Exception:
+    out = ''
+ports, pid, command = {}, None, ''
+for line in out.splitlines():
+    tag, value = line[:1], line[1:]
+    if tag == 'p':
+        pid = int(value)
+    elif tag == 'c':
+        command = value
+    elif tag == 'n' and pid is not None:
+        try:
+            port = int(value.rsplit(':', 1)[1])
+        except (IndexError, ValueError):
+            continue
+        ports.setdefault(port, (pid, command))
+
+
+def cwd_of(pid):
+    try:
+        return os.readlink('/proc/%d/cwd' % pid)
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(['lsof', '-a', '-p', str(pid), '-d', 'cwd', '-Fn'],
+                             capture_output=True, text=True, timeout=5).stdout
+        return next((l[1:] for l in out.splitlines() if l.startswith('n')), '')
+    except Exception:
+        return ''
+
+
+def line_of(pid):
+    # The program by name, not by where it is installed: "Python server.py".
+    try:
+        line = subprocess.run(['ps', '-o', 'command=', '-p', str(pid)],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return ''
+    program, _, rest = line.partition(' ')
+    return (os.path.basename(program) + ' ' + rest).strip()
+
+
+# Resolved, as the folders processes report are: /var is /private/var.
+home = os.path.realpath(os.path.expanduser('~'))
+found = []
+for port, (pid, command) in sorted(ports.items()):
+    cwd = cwd_of(pid)
+    # Only what the user runs: system services start in / or have none, and
+    # apps keep theirs under ~/Library.
+    if not cwd.startswith(home) or cwd.startswith(home + '/Library'):
+        continue
+    found.append({'port': port, 'command': line_of(pid)[:160] or command,
+                  'folder': cwd.replace(home, '~', 1),
+                  'here': bool(folder) and (cwd == folder or cwd.startswith(folder + '/'))})
+found.sort(key=lambda p: (not p['here'], p['port']))
+print('@@@' + json.dumps(found))''';
 
   /// Whether the host has anything that reads subscriptions: the
   /// herdr-agent-usage plugin or CodexBar. Asked once per connection.
@@ -846,6 +956,8 @@ print('@@@' + json.dumps(list(plans.values())))''';
       if (_plansMachine != machine.id) {
         planList = null;
         _planProvider.clear();
+        // Another machine's ports are not this one's.
+        unawaited(tunnels.closeAll());
       }
       _plansMachine = machine.id;
       _startPolling();
@@ -4653,6 +4765,7 @@ for name in names:
     _cacheSave?.cancel();
     _resnapshot?.cancel();
     _tailSession?.close();
+    unawaited(tunnels.closeAll());
     _ssh?.close();
     super.dispose();
   }
@@ -4765,6 +4878,32 @@ class SessionCost {
                 : '\$${usd.round()}';
     return '${estimated ? '≈ ' : ''}$amount${unpriced.isEmpty ? '' : '+'}';
   }
+}
+
+/// A server listening on the host: its port, the command that started it,
+/// and the folder it was started in — [here] when that is the open agent's.
+class HostPort {
+  final int port;
+  final String command;
+  final String folder;
+  final bool here;
+
+  const HostPort(
+      {required this.port,
+      this.command = '',
+      this.folder = '',
+      this.here = false});
+
+  static List<HostPort> fromList(List found) => [
+        for (final p in found.whereType<Map>())
+          if (p['port'] is num)
+            HostPort(
+              port: (p['port'] as num).toInt(),
+              command: (p['command'] as String?) ?? '',
+              folder: (p['folder'] as String?) ?? '',
+              here: p['here'] == true,
+            ),
+      ];
 }
 
 /// One subscription as the host reads it: whose, which plan, and how much

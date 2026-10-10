@@ -174,6 +174,15 @@ there are no bars and the cost is only a cost.
 
 <img src="docs/images/subscriptions.png" width="320" alt="Every limit of every plan: five-hour and weekly windows for Claude and Codex, a weekly one for Grok, each with how much is used and when it resets">
 
+**Open what the agent is serving.** A link an agent prints to a server it
+started — `http://localhost:8787` — opens on the phone, and so does any other
+server on the host, from the chat's menu: those started in the agent's folder
+first, or a port typed in. The page travels through the SSH connection the app
+already holds, the same way `ssh -L` would carry it; on the phone it listens
+only on the phone itself, and nothing on the host is exposed to the network. It
+opens in a browser inside the app, or in Chrome, which reaches it while
+Shepherd keeps the connection.
+
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
 and dirty count for each agent's folder. More than one Herdr session on a host:
 each machine can name the one it follows (`herdr --session work`), so one phone

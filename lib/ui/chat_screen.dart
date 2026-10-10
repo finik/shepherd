@@ -7,6 +7,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../herdr/models.dart';
@@ -16,6 +17,7 @@ import 'agent_glyph.dart';
 import 'blocked_prompt.dart';
 import 'context_pie.dart';
 import 'model_dialog.dart';
+import 'preview_screen.dart';
 import 'quotas_screen.dart';
 import '../transcript/turn.dart';
 import 'design.dart';
@@ -338,6 +340,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 const SizedBox(height: 8),
               const Divider(height: 1),
               ListTile(
+                key: const ValueKey('menu-pages'),
+                title: Text('Web pages on the host', style: d.rowTitle),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _pages(pane);
+                },
+              ),
+              ListTile(
                 title: Text('Rename', style: d.rowTitle),
                 onTap: () {
                   Navigator.of(sheetContext).pop();
@@ -401,6 +411,125 @@ class _ChatScreenState extends State<ChatScreen> {
         : usage.model;
     final effort = usage.effort;
     return effort == null || effort.isEmpty ? model : '$model · $effort';
+  }
+
+  /// A link in the conversation: a page on the host opens here, through a
+  /// tunnel; anything else in the browser.
+  void _openLink(String? href) {
+    final url = href == null ? null : Uri.tryParse(href);
+    if (url == null) return;
+    if (AppState.isHostLocal(url)) {
+      _preview(url);
+    } else if (url.scheme == 'http' || url.scheme == 'https') {
+      launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  void _preview(Uri url) => Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PreviewScreen(state: widget.state, url: url)));
+
+  /// The web servers on the host, the agent's own first, and a port to type
+  /// for one that is not listed.
+  Future<void> _pages(Pane pane) async {
+    final d = D.of(context);
+    final ports = widget.state.listPorts(pane);
+    final typed = TextEditingController();
+    final url = await showModalBottomSheet<Uri>(
+      context: context,
+      backgroundColor: d.ground,
+      isScrollControlled: true,
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.only(
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
+        child: SafeArea(
+          child: FutureBuilder<List<HostPort>?>(
+            future: ports,
+            builder: (context, snapshot) {
+              final found = snapshot.data;
+              void openTyped() {
+                final port = int.tryParse(typed.text.trim());
+                if (port == null || port <= 0 || port > 65535) return;
+                Navigator.of(sheetContext)
+                    .pop(Uri.parse('http://localhost:$port/'));
+              }
+
+              return ConstrainedBox(
+                constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.75),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 18, 16, 4),
+                      child: Text('Web pages on the host', style: d.rowTitle),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(
+                          'Opened here through the SSH connection; nothing '
+                          'is exposed to the network.',
+                          style: d.label.copyWith(color: d.ink3)),
+                    ),
+                    if (snapshot.connectionState != ConnectionState.done)
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text('Asking the host…',
+                            style: d.prose.copyWith(color: d.ink3)),
+                      )
+                    else if (found == null || found.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(
+                            found == null
+                                ? 'The host did not answer.'
+                                : 'Nothing is listening on the host.',
+                            style: d.prose.copyWith(color: d.ink3)),
+                      )
+                    else
+                      for (final p in found)
+                        ListTile(
+                          key: ValueKey('port-${p.port}'),
+                          title: Text(
+                              'localhost:${p.port}${p.here ? '' : '  ·  ${p.folder}'}',
+                              style: d.rowTitle.copyWith(
+                                  color: p.here ? d.ink : d.ink2)),
+                          subtitle: Text(p.command,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: d.label.copyWith(color: d.ink3)),
+                          onTap: () => Navigator.of(sheetContext)
+                              .pop(Uri.parse('http://localhost:${p.port}/')),
+                        ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      child: Row(children: [
+                        Expanded(
+                          child: TextField(
+                            key: const ValueKey('port-typed'),
+                            controller: typed,
+                            keyboardType: TextInputType.number,
+                            style: d.prose,
+                            decoration: InputDecoration(
+                              hintText: 'Another port',
+                              hintStyle: d.prose.copyWith(color: d.ink3),
+                            ),
+                            onSubmitted: (_) => openTyped(),
+                          ),
+                        ),
+                        TextButton(
+                            onPressed: openTyped, child: const Text('OPEN')),
+                      ]),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    typed.dispose();
+    if (url != null && mounted) _preview(url);
   }
 
   void _openQuotas() => Navigator.of(context).push(MaterialPageRoute<void>(
@@ -787,6 +916,7 @@ class _ChatScreenState extends State<ChatScreen> {
           child: MarkdownBody(
             data: prose.join('\n\n'),
             styleSheet: _markdownStyle(d),
+            onTapLink: (_, href, _) => _openLink(href),
           ),
         ),
       );
