@@ -1,31 +1,37 @@
 import 'package:flutter/material.dart';
 
 import '../state/app_state.dart';
+import 'agent_glyph.dart';
 import 'design.dart';
 
-/// What was chosen: a model, an effort, or both; null keeps that one.
+/// What was chosen: another agent, a model, an effort; null keeps that one.
 class ModelChoice {
+  /// Set when the choice is another agent, which replaces the running one.
+  final String? harness;
   final ModelOption? model;
   final String? effort;
 
-  const ModelChoice({this.model, this.effort});
+  const ModelChoice({this.harness, this.model, this.effort});
+
+  bool get isEmpty => harness == null && model == null && effort == null;
 }
 
-/// Pick another model for a running agent, another effort, or both.
+/// Pick another model for a running agent, another effort, or another agent
+/// altogether.
 ///
-/// Both pull-downs are there from the start and begin on what the agent runs
-/// now; the models arrive when the agent has listed them. The efforts are
-/// those of the model chosen, or of the one in use.
+/// All three pull-downs are there from the start and begin on what runs now;
+/// lists arrive as the host answers. Another agent's models and efforts are
+/// its own, and picking it starts that agent in place of this one.
 class ModelDialog extends StatefulWidget {
+  final AppState state;
   final String? agent;
-  final Future<List<ModelOption>> models;
   final String? currentModel;
   final String? currentEffort;
 
   const ModelDialog({
     super.key,
+    required this.state,
     required this.agent,
-    required this.models,
     this.currentModel,
     this.currentEffort,
   });
@@ -35,24 +41,38 @@ class ModelDialog extends StatefulWidget {
 }
 
 class _ModelDialogState extends State<ModelDialog> {
-  List<ModelOption>? _models;
+  List<String>? _installed;
+  late String? _harness = widget.agent;
+  final Map<String, List<ModelOption>> _models = {};
   ModelOption? _model;
   String? _effort;
+
+  bool get _other => _harness != null && _harness != widget.agent;
 
   @override
   void initState() {
     super.initState();
-    widget.models.then((found) {
-      if (mounted) setState(() => _models = found);
+    widget.state.installedHarnesses().then((found) {
+      if (mounted) setState(() => _installed = found);
+    });
+    _loadModels(widget.agent);
+  }
+
+  void _loadModels(String? harness) {
+    if (harness == null || _models.containsKey(harness)) return;
+    widget.state.listModels(harness).then((found) {
+      if (mounted) setState(() => _models[harness] = found);
     });
   }
+
+  List<ModelOption>? get _list => _harness == null ? null : _models[_harness];
 
   /// The listed model the agent runs now, when it can be told: the
   /// transcript names it in full, the list sometimes by alias.
   ModelOption? get _running {
     final now = widget.currentModel;
-    if (now == null || now.isEmpty) return null;
-    for (final m in _models ?? const <ModelOption>[]) {
+    if (_other || now == null || now.isEmpty) return null;
+    for (final m in _list ?? const <ModelOption>[]) {
       if (m.id == now || m.label == now || m.id.endsWith('/$now')) return m;
     }
     return null;
@@ -62,65 +82,132 @@ class _ModelDialogState extends State<ModelDialog> {
     final chosen = _model;
     if (chosen != null) return chosen.efforts;
     return _running?.efforts ??
-        AppState.effortsFor(widget.agent, _models ?? const []);
+        AppState.effortsFor(_harness, _list ?? const []);
   }
 
   @override
   Widget build(BuildContext context) {
     final d = D.of(context);
-    final models = _models;
+    final models = _list;
     final efforts = _efforts;
     final running = widget.currentModel ?? '';
     final effortNow = widget.currentEffort;
+    final installed = _installed;
     return AlertDialog(
       backgroundColor: d.ground,
-      title: Text('Model and effort', style: d.rowTitle),
+      title: Text('Agent, model and effort', style: d.rowTitle),
       content: SizedBox(
         width: double.maxFinite,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('MODEL', style: d.label.copyWith(color: d.ink3)),
-            const SizedBox(height: 6),
-            _pulldown<ModelOption>(
-              d,
-              key: const ValueKey('model-choice'),
-              value: _model,
-              loading: models == null,
-              items: [
-                _item(d, null,
-                    running.isEmpty ? 'As it is' : 'Keep $running', ''),
-                for (final m in models ?? const <ModelOption>[])
-                  _item(d, m, m.label,
-                      m.detail.isEmpty || m.detail == m.label ? m.id : m.detail),
-              ],
-              onChanged: (m) => setState(() {
-                _model = m;
-                if (_effort != null && !_efforts.contains(_effort)) {
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('AGENT', style: d.label.copyWith(color: d.ink3)),
+              const SizedBox(height: 6),
+              _pulldown<String>(
+                d,
+                key: const ValueKey('agent-choice'),
+                value: _harness,
+                loading: installed == null,
+                items: [
+                  for (final h in {
+                    ?widget.agent,
+                    ...?installed,
+                  })
+                    DropdownMenuItem<String?>(
+                      value: h,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(children: [
+                          AgentGlyph(agent: h, size: 16),
+                          const SizedBox(width: 10),
+                          Flexible(
+                            child: Text(
+                                '${AgentGlyph.nameOf(h)}'
+                                '${h == widget.agent ? '  ·  running' : ''}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: d.rowTitle.copyWith(fontSize: 15)),
+                          ),
+                        ]),
+                      ),
+                    ),
+                ],
+                onChanged: (h) => setState(() {
+                  if (h == null || h == _harness) return;
+                  _harness = h;
+                  _model = null;
                   _effort = null;
-                }
-              }),
-            ),
-            const SizedBox(height: 16),
-            Text('EFFORT', style: d.label.copyWith(color: d.ink3)),
-            const SizedBox(height: 6),
-            _pulldown<String>(
-              d,
-              key: const ValueKey('effort-choice'),
-              value: _effort,
-              loading: models == null && _model == null && efforts.isEmpty,
-              hint: efforts.isEmpty ? 'This model has no effort setting' : null,
-              items: [
-                _item(d, null,
-                    effortNow == null ? 'As it is' : 'Keep $effortNow', ''),
-                for (final e in efforts) _item(d, e, e, ''),
-              ],
-              onChanged: efforts.isEmpty
-                  ? null
-                  : (e) => setState(() => _effort = e),
-            ),
-          ],
+                  _loadModels(h);
+                }),
+              ),
+              if (_other)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                      'Starts ${AgentGlyph.nameOf(_harness!)} here in place of '
+                      '${AgentGlyph.nameOf(widget.agent!)}. The conversation '
+                      'so far stays in its transcript; the new agent starts '
+                      'without it.',
+                      style: d.label.copyWith(color: d.ink3)),
+                ),
+              const SizedBox(height: 16),
+              Text('MODEL', style: d.label.copyWith(color: d.ink3)),
+              const SizedBox(height: 6),
+              _pulldown<ModelOption>(
+                d,
+                key: const ValueKey('model-choice'),
+                value: _model,
+                loading: models == null,
+                items: [
+                  _item(
+                      d,
+                      null,
+                      _other
+                          ? 'Default'
+                          : running.isEmpty
+                              ? 'As it is'
+                              : 'Keep $running',
+                      _other ? 'Whatever ${AgentGlyph.nameOf(_harness!)} is set to use' : ''),
+                  for (final m in models ?? const <ModelOption>[])
+                    _item(d, m, m.label,
+                        m.detail.isEmpty || m.detail == m.label ? m.id : m.detail),
+                ],
+                onChanged: (m) => setState(() {
+                  _model = m;
+                  if (_effort != null && !_efforts.contains(_effort)) {
+                    _effort = null;
+                  }
+                }),
+              ),
+              const SizedBox(height: 16),
+              Text('EFFORT', style: d.label.copyWith(color: d.ink3)),
+              const SizedBox(height: 6),
+              _pulldown<String>(
+                d,
+                key: const ValueKey('effort-choice'),
+                value: _effort,
+                loading: models == null && _model == null && efforts.isEmpty,
+                hint: efforts.isEmpty ? 'This model has no effort setting' : null,
+                items: [
+                  _item(
+                      d,
+                      null,
+                      _other
+                          ? 'Default'
+                          : effortNow == null
+                              ? 'As it is'
+                              : 'Keep $effortNow',
+                      ''),
+                  for (final e in efforts) _item(d, e, e, ''),
+                ],
+                onChanged: efforts.isEmpty
+                    ? null
+                    : (e) => setState(() => _effort = e),
+              ),
+            ],
+          ),
         ),
       ),
       actions: [
@@ -130,10 +217,12 @@ class _ModelDialogState extends State<ModelDialog> {
         ),
         TextButton(
           key: const ValueKey('model-switch'),
-          onPressed: _model == null && _effort == null
+          onPressed: !_other && _model == null && _effort == null
               ? null
-              : () => Navigator.of(context)
-                  .pop(ModelChoice(model: _model, effort: _effort)),
+              : () => Navigator.of(context).pop(ModelChoice(
+                  harness: _other ? _harness : null,
+                  model: _model,
+                  effort: _effort)),
           child: const Text('SWITCH'),
         ),
       ],

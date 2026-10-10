@@ -360,7 +360,8 @@ void main() {
       await settle(tester);
       await tester.tap(find.byKey(const ValueKey('model-line')));
       await settle(tester);
-      expect(find.text('Model and effort'), findsOneWidget);
+      expect(find.text('Agent, model and effort'), findsOneWidget);
+      expect(find.byKey(const ValueKey('agent-choice')), findsOneWidget);
       expect(find.byKey(const ValueKey('model-choice')), findsOneWidget);
       expect(find.byKey(const ValueKey('effort-choice')), findsOneWidget);
       expect(find.text('Keep gpt-6-luna'), findsOneWidget);

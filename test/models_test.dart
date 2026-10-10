@@ -76,6 +76,22 @@ void main() {
         ['low', 'high', 'ultra']);
   });
 
+  test('an agent starts on a model and an effort, each its own way', () {
+    expect(AppState.startCommand('claude'), 'claude');
+    expect(AppState.startCommand('claude', model: 'opus', effort: 'high'),
+        "claude --model 'opus' --effort 'high'");
+    expect(AppState.startCommand('codex', model: 'gpt-6-luna', effort: 'low'),
+        "codex -m 'gpt-6-luna' -c 'model_reasoning_effort=low'");
+    expect(AppState.startCommand('pi', model: 'xai/grok-4.6', effort: 'high'),
+        "pi --model 'xai/grok-4.6' --thinking 'high'");
+    expect(AppState.startCommand('muse', effort: 'max'),
+        "muse --reasoning-effort 'max'");
+    // OpenCode's interactive mode takes no effort; the model still applies.
+    expect(AppState.startCommand('opencode', model: 'opencode/big-pickle',
+        effort: 'high'), "opencode -m 'opencode/big-pickle'");
+    expect(AppState.startCommand('nope'), isNull);
+  });
+
   test('a model the list does not show is not guessed at', () {
     expect(AppState.pickerKeys(screen('codex_picker'), codex, 'gpt-7'), isNull);
     expect(AppState.pickerKeys('no list here', codex, 'GPT-5.5'), isNull);

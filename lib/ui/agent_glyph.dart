@@ -14,6 +14,17 @@ class AgentGlyph extends StatelessWidget {
 
   const AgentGlyph({super.key, required this.agent, this.size = 14});
 
+  /// An agent as people name it: "Claude Code", "OpenCode".
+  static String nameOf(String agent) => const {
+        'claude': 'Claude Code',
+        'codex': 'Codex',
+        'pi': 'Pi',
+        'omp': 'omp',
+        'opencode': 'OpenCode',
+        'muse': 'muse',
+      }[agent] ??
+      agent;
+
   @override
   Widget build(BuildContext context) {
     final d = D.of(context);

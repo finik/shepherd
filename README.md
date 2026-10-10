@@ -133,11 +133,14 @@ approve its edits on the phone, then install what it built.
 agent: pick one of the agents installed on the host, a model from the list that
 agent keeps, and a folder — one an agent already works in, or any folder under
 your home folder, shown as `~/…`. The model and effort under the chat's context
-pie open a choice of both:
+pie open a choice of agent, model and effort:
 a running Claude Code, Pi, Codex or muse agent can move to another model,
 another effort, or both. The switch applies to that session and leaves the
-agent's saved defaults as they were. omp and OpenCode take their model when they
-start. The chat's menu closes an agent, after asking.
+agent's saved defaults as they were. Choosing another agent replaces this one
+in the same pane and folder — it exits, and the new one starts on the model and
+effort chosen; the conversation so far stays in its transcript, and the new
+agent starts without it. omp and OpenCode take their model when they start, so
+a new model for them restarts them the same way. The chat's menu closes an agent, after asking.
 
 <p>
   <img src="docs/images/new-agent.png" width="250" alt="Starting an agent: the folder chosen, and the agents installed on the host to choose from">

@@ -276,9 +276,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   GestureDetector(
                     key: const ValueKey('model-line'),
                     behavior: HitTestBehavior.opaque,
-                    onTap: pane != null && AppState.canSwitchModel(pane.agent)
-                        ? () => _chooseModel(pane)
-                        : null,
+                    onTap: pane != null ? () => _chooseModel(pane) : null,
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(12, 0, pad, 12),
                       child: ConstrainedBox(
@@ -685,25 +683,32 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _chooseModel(Pane pane) async {
     final state = widget.state;
     final messenger = ScaffoldMessenger.of(context);
-    final models = state.listModels(pane.agent ?? '');
     final picked = await showDialog<ModelChoice>(
       context: context,
       builder: (_) => ModelDialog(
+        state: state,
         agent: pane.agent,
-        models: models,
         currentModel: state.contextUsage?.model,
         currentEffort: state.contextUsage?.effort,
       ),
     );
-    if (picked == null || (picked.model == null && picked.effort == null)) {
-      return;
-    }
-    final ok = await state.switchModel(pane,
-        model: picked.model, effort: picked.effort, options: await models);
+    if (picked == null || picked.isEmpty) return;
     final what = [
+      if (picked.harness != null) AgentGlyph.nameOf(picked.harness!),
       if (picked.model != null) picked.model!.label,
       if (picked.effort != null) '${picked.effort} effort',
     ].join(', ');
+    // Another agent, or a new model for one that takes its model only when
+    // it starts: the agent in this pane is replaced.
+    final harness = picked.harness ??
+        (AppState.canSwitchModel(pane.agent) ? null : pane.agent);
+    final ok = harness != null
+        ? await state.switchHarness(pane, harness,
+            model: picked.model?.id, effort: picked.effort)
+        : await state.switchModel(pane,
+            model: picked.model,
+            effort: picked.effort,
+            options: await state.listModels(pane.agent ?? ''));
     messenger.showSnackBar(SnackBar(
         content: Text(ok ? 'Switching to $what' : 'Could not switch to $what')));
   }

@@ -3695,6 +3695,72 @@ if found:
     'muse': '--model',
   };
 
+  /// The flag each agent takes to start at a given effort. Codex takes it as
+  /// a setting, and OpenCode's interactive mode takes none.
+  static const effortFlags = <String, String>{
+    'claude': '--effort',
+    'pi': '--thinking',
+    'omp': '--thinking',
+    'muse': '--reasoning-effort',
+  };
+
+  /// The command that starts [harness], on [model] and at [effort] when
+  /// given; null for an agent Shepherd cannot start.
+  @visibleForTesting
+  static String? startCommand(String harness, {String? model, String? effort}) {
+    final base = harnesses[harness];
+    if (base == null) return null;
+    final parts = [base];
+    if (model != null) parts.addAll([modelFlags[harness]!, _shellQuote(model)]);
+    if (effort != null) {
+      if (harness == 'codex') {
+        parts.addAll(['-c', _shellQuote('model_reasoning_effort=$effort')]);
+      } else if (effortFlags[harness] case final flag?) {
+        parts.addAll([flag, _shellQuote(effort)]);
+      }
+    }
+    return parts.join(' ');
+  }
+
+  /// Replace the agent in [pane] with [harness]: the running one exits —
+  /// two Ctrl+C, which every agent here takes as quit — and once Herdr sees
+  /// the shell again, the new one starts in the same folder, on [model] and
+  /// at [effort] when given. The old conversation stays in its transcript;
+  /// the new agent starts without it.
+  Future<bool> switchHarness(Pane pane, String harness,
+      {String? model, String? effort}) async {
+    final rpc = _rpc;
+    final command = startCommand(harness, model: model, effort: effort);
+    if (rpc == null || command == null) return false;
+    touchActivity();
+    try {
+      var stopped = false;
+      for (var attempt = 0; attempt < 3 && !stopped; attempt++) {
+        await rpc.sendKeys(pane.paneId, const ['ctrl+c']);
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        await rpc.sendKeys(pane.paneId, const ['ctrl+c']);
+        for (var i = 0; i < 10 && !stopped; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          stopped = await rpc.paneAgent(pane.paneId) == null;
+        }
+      }
+      if (!stopped) {
+        error = 'the agent in ${pane.sessionName} did not exit';
+        notifyListeners();
+        return false;
+      }
+      await rpc.sendText(pane.paneId, command);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await rpc.sendKeys(pane.paneId, const ['enter']);
+      await refreshNow();
+      return true;
+    } catch (e) {
+      error = 'could not switch to $harness: $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// Each agent's models, asked for once per connection: the list changes
   /// when an agent is updated or logged in again, not while it is in use.
   final Map<String, Future<List<ModelOption>>> _models = {};
@@ -4550,10 +4616,7 @@ for name in names:
   /// as its own CLI does.
   Future<bool> startAgent(String cwd, String harness, {String? model}) async {
     final rpc = _rpc;
-    final base = harnesses[harness];
-    final command = model == null || base == null
-        ? base
-        : '$base ${modelFlags[harness]} ${_shellQuote(model)}';
+    final command = startCommand(harness, model: model);
     if (rpc == null || command == null) return false;
     touchActivity();
     try {

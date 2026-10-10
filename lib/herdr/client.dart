@@ -194,6 +194,13 @@ class HerdrClient {
     return ((res['root_pane'] as Map?)?['pane_id']) as String?;
   }
 
+  /// The agent Herdr sees running in the pane; null once it has exited back
+  /// to the shell.
+  Future<String?> paneAgent(String paneId) async {
+    final res = await call('pane.get', {'pane_id': paneId});
+    return (res['pane'] as Map?)?['agent'] as String?;
+  }
+
   /// Closes the pane, and the agent running in it. Herdr closes the
   /// workspace too when this was its last pane.
   Future<void> closePane(String paneId) =>

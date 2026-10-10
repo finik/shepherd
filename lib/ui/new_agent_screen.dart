@@ -19,15 +19,6 @@ class NewAgentScreen extends StatefulWidget {
 }
 
 class _NewAgentScreenState extends State<NewAgentScreen> {
-  static const _names = {
-    'claude': 'Claude Code',
-    'codex': 'Codex',
-    'pi': 'Pi',
-    'omp': 'omp',
-    'opencode': 'OpenCode',
-    'muse': 'muse',
-  };
-
   String? _folder;
   String? _harness;
   List<String>? _installed;
@@ -210,7 +201,7 @@ class _NewAgentScreenState extends State<NewAgentScreen> {
                                 ? 'CHOOSE AN AGENT'
                                 : _folder == null
                                     ? 'CHOOSE A FOLDER'
-                                    : 'START ${_names[_harness]!.toUpperCase()}',
+                                    : 'START ${AgentGlyph.nameOf(_harness!).toUpperCase()}',
                         style: d.label.copyWith(fontSize: 13, color: d.ground),
                       ),
                     ),
@@ -302,7 +293,7 @@ class _NewAgentScreenState extends State<NewAgentScreen> {
       items: loading || idle
           ? const []
           : [
-        item(null, 'Default', 'Whatever ${_names[_harness]} is set to use'),
+        item(null, 'Default', 'Whatever ${AgentGlyph.nameOf(_harness!)} is set to use'),
         for (final m in models)
           item(m.id, m.label,
               m.detail.isEmpty || m.detail == m.label ? m.id : m.detail),
@@ -341,7 +332,7 @@ class _NewAgentScreenState extends State<NewAgentScreen> {
               child: Row(children: [
                 AgentGlyph(agent: h, size: 16),
                 const SizedBox(width: 10),
-                Text(_names[h] ?? h,
+                Text(AgentGlyph.nameOf(h),
                     style: d.rowTitle.copyWith(fontSize: 15)),
               ]),
             ),
