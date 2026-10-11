@@ -466,7 +466,7 @@ print('@@@' + json.dumps(found))''';
     }
   }
 
-  static const _plansPython = r'''import glob, json, os, shutil, subprocess, sys, time
+  static const _plansPython = r'''import calendar, glob, json, os, shutil, subprocess, sys, time
 # What is left of each subscription, from whichever readers the host has:
 # the herdr-agent-usage plugin's saved snapshots, then CodexBar for any
 # provider the plugin has nothing for. Either may be missing; with neither,
@@ -541,6 +541,48 @@ for snap in snapshots():
             'minutes': minutes,
             'resetsAt': iso(reset) if isinstance(reset, (int, float)) else reset})
         plan['_at'] = max(plan['_at'], at)
+# A session whose status line carries no quota still writes the plugin's
+# files, with no windows in them, until another session writes again. The
+# quota is the account's, so the last reading of each window stands until
+# that window resets; it is kept here for when the files have none.
+LAST = os.path.join(home, '.shepherd', 'plans-last.json')
+try:
+    with open(LAST) as handle:
+        last = json.load(handle)
+except Exception:
+    last = {}
+now = time.time()
+for provider, windows in last.items():
+    if not isinstance(windows, dict):
+        continue
+    plan = plans.setdefault(provider, {'provider': provider, 'plan': '',
+                                       'windows': {}, '_at': 0})
+    for key, kept in windows.items():
+        if not isinstance(kept, dict) or not isinstance(kept.get('window'), dict):
+            continue
+        key = int(key) if str(key).isdigit() else key
+        if key in plan['windows']:
+            continue
+        reset = kept['window'].get('resetsAt')
+        try:
+            ended = reset and calendar.timegm(
+                time.strptime(reset[:19], '%Y-%m-%dT%H:%M:%S')) < now
+        except Exception:
+            ended = False
+        if ended:
+            continue
+        plan['windows'][key] = (kept.get('at') or 0, kept['window'])
+        plan['_at'] = max(plan['_at'], kept.get('at') or 0)
+try:
+    os.makedirs(os.path.dirname(LAST), exist_ok=True)
+    with open(LAST + '.tmp', 'w') as handle:
+        json.dump({p: {str(k): {'at': at, 'window': w}
+                       for k, (at, w) in plan['windows'].items()}
+                   for p, plan in plans.items()}, handle)
+    os.replace(LAST + '.tmp', LAST)
+except Exception:
+    pass
+
 for provider in list(plans):
     plan = plans[provider]
     if not plan['windows']:

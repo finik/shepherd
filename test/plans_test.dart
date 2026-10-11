@@ -113,6 +113,53 @@ void main() {
     expect(claude.windows.map((w) => w.usedPercent), [9, 88]);
   });
 
+  test('a session that reports no quota does not hide the last reading', () {
+    final future = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600;
+    plugin('claude-statusline', {
+      'snapshot': {
+        'provider': 'claude',
+        'fetched_at_unix': 1790874304,
+        'windows': [
+          {'kind': 'five_hour', 'used_percent': 24.0, 'resets_at': future},
+        ],
+      },
+    });
+    codexbar(silent: true);
+    expect(PlanUsage.fromList(run() as List).single.windows.single.usedPercent,
+        24);
+    // Another session's status line writes the same file with no windows.
+    plugin('claude-statusline', {
+      'snapshot': {
+        'provider': 'claude',
+        'fetched_at_unix': 1790874999,
+        'windows': [],
+      },
+    });
+    final claude = PlanUsage.fromList(run() as List).single;
+    expect(claude.windows.single.usedPercent, 24);
+    expect(claude.windows.single.minutes, 300);
+  });
+
+  test('a kept reading goes once its window has reset', () {
+    final past = DateTime.now().millisecondsSinceEpoch ~/ 1000 - 60;
+    plugin('claude-statusline', {
+      'snapshot': {
+        'provider': 'claude',
+        'fetched_at_unix': 1790874304,
+        'windows': [
+          {'kind': 'five_hour', 'used_percent': 24.0, 'resets_at': past},
+        ],
+      },
+    });
+    codexbar(silent: true);
+    run();
+    plugin('claude-statusline', {
+      'snapshot': {'provider': 'claude', 'fetched_at_unix': 1790874999,
+          'windows': []},
+    });
+    expect(PlanUsage.fromList(run() as List), isEmpty);
+  });
+
   test('CodexBar gives a window the plugin has not seen', () {
     plugin('claude-statusline', {
       'snapshot': {
