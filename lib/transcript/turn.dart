@@ -186,6 +186,11 @@ class Turn {
   /// transcript. It is shown straight away and replaced by the real record.
   final bool pending;
 
+  /// The agent compacted its context here: [userText] is the summary it
+  /// carried forward, not anything typed, and what follows is the agent
+  /// carrying on from it.
+  final bool compaction;
+
   /// Everything the agent emitted, in the order it emitted it.
   final List<TurnStep> steps = [];
 
@@ -206,7 +211,11 @@ class Turn {
     });
   }
 
-  Turn({required this.id, required this.userText, this.pending = false});
+  Turn(
+      {required this.id,
+      required this.userText,
+      this.pending = false,
+      this.compaction = false});
 
   Iterable<String> get assistantTexts =>
       steps.whereType<Reply>().map((r) => r.text);

@@ -77,6 +77,7 @@ class TranscriptCache {
                 {
                   'id': t.id,
                   'userText': t.userText,
+                  if (t.compaction) 'compaction': true,
                   'steps': [for (final step in t.steps) step.toMap()],
                 }
             ],

@@ -49,6 +49,17 @@ class CodexAdapter implements TranscriptAdapter {
       ));
       return true;
     }
+    // Codex marks a compaction with a record of its own; the summary, when
+    // it writes one, is its message.
+    if (r['type'] == 'compacted') {
+      final p = r['payload'];
+      final message = p is Map ? p['message'] : null;
+      turns.add(Turn(
+          id: 'x${_seq++}',
+          userText: message is String ? clampBlock(message, max: 20000) : '',
+          compaction: true));
+      return true;
+    }
     // Codex reports the context itself, window included, after each call.
     if (r['type'] == 'turn_context' && r['payload'] is Map) {
       final p = r['payload'] as Map;

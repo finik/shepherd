@@ -441,6 +441,16 @@ class ClaudeAdapter implements TranscriptAdapter {
           text.startsWith('<local-command')) {
         return changed;
       }
+      // When Claude compacts, it carries on from a summary written as a user
+      // message and marked `isCompactSummary`. It marks where the context was
+      // compacted; it is not something you typed.
+      if (r['isCompactSummary'] == true) {
+        turns.add(Turn(
+            id: 'c${_seq++}',
+            userText: clampBlock(compactionSummary(text), max: 20000),
+            compaction: true));
+        return true;
+      }
       // Claude writes more than what you typed as user messages, and says
       // which: its own notes are `isMeta`, and a background task reporting
       // back arrives with `promptSource: "system"`. Neither is you.
@@ -550,6 +560,16 @@ class PiAdapter implements TranscriptAdapter {
             used: u.used, model: u.model, window: u.window, effort: _thinking);
       }
       return false;
+    }
+    // Pi records a compaction as its own entry, with the summary it carries
+    // forward.
+    if (r['type'] == 'compaction') {
+      final summary = r['summary'];
+      turns.add(Turn(
+          id: 'p${_seq++}',
+          userText: summary is String ? clampBlock(summary, max: 20000) : '',
+          compaction: true));
+      return true;
     }
     if (r['type'] != 'message') return false;
     final msg = r['message'];
@@ -802,12 +822,24 @@ List<Map<String, dynamic>> parseTranscript(Map<String, String> request) {
       {
         'id': t.id,
         'userText': t.userText,
+        if (t.compaction) 'compaction': true,
         // Carry the host's thumbnails across, so they are not fetched again.
         'steps': [for (final step in t.steps) step.toMap(withThumb: true)],
       },
     // Last, and only when there is one; turnsFromMaps passes over it.
     if (usage != null) {'__usage': usage.toMap()},
   ];
+}
+
+/// The summary in Claude's compaction message, without what it says around
+/// it: "This session is being continued from a previous conversation…", and
+/// a note on content the summary may restate.
+String compactionSummary(String text) {
+  final at = text.indexOf('Summary:');
+  final body = at >= 0 ? text.substring(at + 'Summary:'.length) : text;
+  return body
+      .replaceAll(RegExp(r'^\s*<[a-z-]+/>\s*', multiLine: true), '')
+      .trim();
 }
 
 /// The context use the isolate sent back with the turns, if any.
@@ -820,7 +852,10 @@ ContextUsage? usageFromMaps(List<Map<String, dynamic>> maps) =>
 List<Turn> turnsFromMaps(List<Map<String, dynamic>> maps) => [
       for (final m in maps)
         if (!m.containsKey('__usage'))
-        Turn(id: m['id'] as String, userText: m['userText'] as String)
+        Turn(
+            id: m['id'] as String,
+            userText: m['userText'] as String,
+            compaction: m['compaction'] == true)
           ..steps.addAll([
             for (final step in (m['steps'] as List))
               TurnStep.fromMap((step as Map).cast<String, dynamic>())

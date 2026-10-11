@@ -858,11 +858,64 @@ class _ChatScreenState extends State<ChatScreen> {
   /// User turn is a full-bleed band; the agent reply is unadorned prose at
   /// full measure. Fill and weight are the two channels that separate them —
   /// bubbles would spend a fifth of a 360dp measure on gutters.
+  /// Where the agent compacted its context: a rule across the thread, and
+  /// the summary it carried forward a tap away. The summary is the agent's,
+  /// not anything typed, so it is not drawn as a message from you.
+  Widget _compacted(D d, Turn turn, double pad) {
+    final summary = turn.userText.trim();
+    return InkWell(
+      key: ValueKey('compacted-${turn.id}'),
+      onTap: summary.isEmpty
+          ? null
+          : () => showModalBottomSheet<void>(
+                context: context,
+                backgroundColor: d.ground,
+                isScrollControlled: true,
+                builder: (sheetContext) => SafeArea(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                        maxHeight: MediaQuery.of(context).size.height * 0.85),
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.fromLTRB(pad, 18, pad, 24),
+                      children: [
+                        Text('What the agent carried forward',
+                            style: d.rowTitle),
+                        const SizedBox(height: 12),
+                        MarkdownBody(
+                          data: summary,
+                          styleSheet: _markdownStyle(d),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(pad, 14, pad, 18),
+        child: Row(children: [
+          Expanded(child: Divider(color: d.divider, thickness: 1)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+                summary.isEmpty
+                    ? 'CONTEXT COMPACTED'
+                    : 'CONTEXT COMPACTED · SUMMARY',
+                style: d.kicker.copyWith(color: d.ink3)),
+          ),
+          Expanded(child: Divider(color: d.divider, thickness: 1)),
+        ]),
+      ),
+    );
+  }
+
   Widget _turn(D d, Turn turn, double pad) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (turn.userText.isNotEmpty)
+        if (turn.compaction)
+          _compacted(d, turn, pad)
+        else if (turn.userText.isNotEmpty)
           Container(
             width: double.infinity,
             color: d.fill,

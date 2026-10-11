@@ -107,6 +107,11 @@ check("a background task reporting back is not you", not notify.typed_by_you({
     "type": "user", "promptSource": "system",
     "origin": {"kind": "task-notification"},
     "message": {"role": "user", "content": "<task-notification>…"}}))
+check("the summary Claude carries on from after compacting is not you",
+      not notify.typed_by_you({
+          "type": "user", "isCompactSummary": True,
+          "isVisibleInTranscriptOnly": True,
+          "message": {"role": "user", "content": "This session is being continued…"}}))
 check("a typed prompt is", notify.typed_by_you({
     "type": "user", "promptSource": "typed", "origin": {"kind": "human"},
     "message": {"role": "user", "content": "check the history"}}))
