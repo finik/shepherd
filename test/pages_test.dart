@@ -115,4 +115,47 @@ void main() {
     expect(find.text('The host did not answer.'), findsOneWidget);
     expect(find.byKey(const ValueKey('port-typed')), findsOneWidget);
   });
+
+  testWidgets('an open page can be closed from the menu', (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final state = AppState()
+      ..host = HostState.fromSnapshot({
+        'panes': [
+          {'pane_id': 'p', 'agent': 'pi', 'agent_status': 'idle', 'cwd': '/x/retirement'}
+        ],
+        'agents': [
+          {'pane_id': 'p', 'agent': 'pi', 'agent_status': 'idle', 'cwd': '/x/retirement'}
+        ],
+      })
+      ..selectedPaneId = 'p'
+      ..transcriptLoading = false
+      ..conn = ConnState.connected
+      ..turns = [Turn(id: 't', userText: 'hi')];
+    Future<void> settle() async {
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    await tester.pumpWidget(MaterialApp(home: ChatScreen(state: state)));
+    await settle();
+    await tester.tap(find.byKey(const ValueKey('chat-menu')));
+    await settle();
+    // Nothing open, nothing to close.
+    expect(find.byKey(const ValueKey('menu-close-page')), findsNothing);
+    Navigator.of(tester.element(find.text('Close agent'))).pop();
+    await settle();
+
+    state
+      ..openPage(Uri.parse('http://localhost:8787/'))
+      ..showPage(false);
+    await tester.tap(find.byKey(const ValueKey('chat-menu')));
+    await settle();
+    expect(find.text('localhost:8787'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('menu-close-page')));
+    await settle();
+    expect(state.pageUrl, isNull);
+  });
 }

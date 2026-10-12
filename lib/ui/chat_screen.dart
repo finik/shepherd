@@ -339,11 +339,25 @@ class _ChatScreenState extends State<ChatScreen> {
               ListTile(
                 key: const ValueKey('menu-pages'),
                 title: Text('Web pages on the host', style: d.rowTitle),
+                subtitle: Text('The one started in this folder opens directly',
+                    style: d.label.copyWith(color: d.ink3)),
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _pages(pane);
                 },
               ),
+              if (state.pageUrl case final open?)
+                ListTile(
+                  key: const ValueKey('menu-close-page'),
+                  title: Text('Close web page', style: d.rowTitle),
+                  subtitle: Text(
+                      '${open.host}:${open.hasPort ? open.port : 80}',
+                      style: d.label.copyWith(color: d.ink3)),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    state.closePage();
+                  },
+                ),
               ListTile(
                 title: Text('Rename', style: d.rowTitle),
                 onTap: () {
@@ -430,6 +444,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final d = D.of(context);
     final ports = widget.state.listPorts(pane);
     final typed = TextEditingController();
+    var chosen = false;
     final url = await showModalBottomSheet<Uri>(
       context: context,
       backgroundColor: d.ground,
@@ -442,6 +457,19 @@ class _ChatScreenState extends State<ChatScreen> {
             future: ports,
             builder: (context, snapshot) {
               final found = snapshot.data;
+              // One server started in this folder is the one meant: open it
+              // rather than asking.
+              final here = [...?found?.where((p) => p.here)];
+              if (here.length == 1 && !chosen) {
+                chosen = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  // Only while the sheet is still the screen in front.
+                  if (ModalRoute.of(sheetContext)?.isCurrent ?? false) {
+                    Navigator.of(sheetContext).pop(
+                        Uri.parse('http://localhost:${here.single.port}/'));
+                  }
+                });
+              }
               void openTyped() {
                 final port = int.tryParse(typed.text.trim());
                 if (port == null || port <= 0 || port > 65535) return;
