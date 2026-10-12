@@ -42,18 +42,28 @@ void main() {
         .transform(utf8.decoder)
         .firstWhere((l) => l.contains('port'));
     final port = int.parse(RegExp(r'port (\d+)').firstMatch(line)!.group(1)!);
-    final out = await Process.run(
-        'python3', ['-c', AppState.portsScriptForTest, dir.path],
-        environment: {'HOME': dir.parent.path});
-    final found = HostPort.fromList(jsonDecode(
-        (out.stdout as String).split('\n').lastWhere((l) => l.startsWith('@@@'))
-            .substring(3)) as List);
+    // lsof walks every process on the machine; with the rest of the suite
+    // running alongside it can take longer than the script waits.
+    var found = <HostPort>[];
+    for (var attempt = 0;
+        attempt < 3 && !found.any((p) => p.port == port);
+        attempt++) {
+      final out = await Process.run(
+          'python3', ['-c', AppState.portsScriptForTest, dir.path],
+          environment: {'HOME': dir.parent.path});
+      found = HostPort.fromList(jsonDecode((out.stdout as String)
+          .split('\n')
+          .lastWhere((l) => l.startsWith('@@@'))
+          .substring(3)) as List);
+    }
     final ours = found.firstWhere((p) => p.port == port);
     expect(ours.here, isTrue);
     expect(ours.command, contains('http.server'));
     // The pane's own servers come first.
     expect(found.first.here, isTrue);
-  }, skip: Platform.isMacOS || Platform.isLinux ? false : 'needs lsof');
+  },
+      timeout: const Timeout(Duration(minutes: 2)),
+      skip: Platform.isMacOS || Platform.isLinux ? false : 'needs lsof');
 
   test('a page stays open when put away, until it is closed', () {
     final state = AppState();
