@@ -140,6 +140,20 @@ class _PageDrawerState extends State<PageDrawer>
                 onHorizontalDragEnd: _release,
               ),
             ),
+            // The lip back to the chat, the mirror of the one that brought
+            // the page out: tapped or pulled, it puts the page away.
+            Positioned(
+              left: 0,
+              top: MediaQuery.of(context).size.height * 0.42,
+              child: _lip(
+                d,
+                key: const ValueKey('page-lip-back'),
+                icon: Icons.chevron_right,
+                side: _LipSide.left,
+                onTap: () => widget.state.showPage(false),
+                width: width,
+              ),
+            ),
           ]),
         ),
       if (url != null)
@@ -150,28 +164,49 @@ class _PageDrawerState extends State<PageDrawer>
               : Positioned(
                   right: 0,
                   top: MediaQuery.of(context).size.height * 0.42,
-                  child: GestureDetector(
+                  child: _lip(
+                    d,
                     key: const ValueKey('page-lip'),
-                    behavior: HitTestBehavior.opaque,
+                    icon: Icons.chevron_left,
+                    side: _LipSide.right,
                     onTap: () => widget.state.showPage(true),
-                    onHorizontalDragUpdate: (e) => _drag(e, width),
-                    onHorizontalDragEnd: _release,
-                    child: Container(
-                      width: 22,
-                      height: 76,
-                      decoration: BoxDecoration(
-                        color: d.ink,
-                        borderRadius: const BorderRadius.horizontal(
-                            left: Radius.circular(10)),
-                      ),
-                      child: Icon(Icons.chevron_left,
-                          size: 20, color: d.ground),
-                    ),
+                    width: width,
                   ),
                 ),
         ),
     ]);
   }
+}
+
+enum _LipSide { left, right }
+
+extension on _PageDrawerState {
+  /// A small tab on the screen's edge: tapped, or pulled across, it moves
+  /// between the page and the screen beneath.
+  Widget _lip(D d,
+          {required Key key,
+          required IconData icon,
+          required _LipSide side,
+          required VoidCallback onTap,
+          required double width}) =>
+      GestureDetector(
+        key: key,
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        onHorizontalDragUpdate: (e) => _drag(e, width),
+        onHorizontalDragEnd: _release,
+        child: Container(
+          width: 22,
+          height: 76,
+          decoration: BoxDecoration(
+            color: d.ink,
+            borderRadius: side == _LipSide.right
+                ? const BorderRadius.horizontal(left: Radius.circular(10))
+                : const BorderRadius.horizontal(right: Radius.circular(10)),
+          ),
+          child: Icon(icon, size: 20, color: d.ground),
+        ),
+      );
 }
 
 /// Marks the page as out, so the back button comes to it.
