@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -20,7 +22,7 @@ if (file("google-services.json").exists() &&
 // The release key lives outside the repository; android/key.properties, also
 // outside git, says where it is. Without it, release builds are signed with
 // the debug key so `flutter run --release` still works.
-val releaseKey = java.util.Properties().apply {
+val releaseKey = Properties().apply {
     val file = rootProject.file("key.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
