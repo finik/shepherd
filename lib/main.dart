@@ -31,9 +31,17 @@ Future<void> main() async {
   await Bugsee.launch(
     _bugseeToken,
     appRunCallback: (_) => _run(),
-    // No permanent "report a bug" notification: the app keeps one of its
-    // own up while it watches the host, and two is clutter.
-    launchOptions: AndroidLaunchOptions()..notificationBarTrigger = false,
+    launchOptions: AndroidLaunchOptions()
+      // Crashes only. Nothing asks to report a bug — no shake, screenshot or
+      // notification — and nothing of the screen is kept: a recording of it
+      // is the user's transcripts and code.
+      ..crashReport = true
+      ..ndkCrashReport = true
+      ..shakeToReport = false
+      ..notificationBarTrigger = false
+      ..videoEnabled = false
+      ..screenshotEnabled = false
+      ..viewHierarchyEnabled = false,
   );
 }
 

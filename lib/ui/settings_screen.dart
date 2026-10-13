@@ -3,6 +3,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
+import '../state/push.dart';
 import '../state/app_state.dart';
 import '../state/watch.dart';
 import 'design.dart';
@@ -167,8 +168,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       _modeOption(d, state, 'OFF', 'off'),
                       const SizedBox(width: 8),
-                      _modeOption(d, state, 'PUSH', 'push'),
-                      const SizedBox(width: 8),
+                      // A build without its own Firebase project has no push.
+                      if (Push.available) ...[
+                        _modeOption(d, state, 'PUSH', 'push'),
+                        const SizedBox(width: 8),
+                      ],
                       _modeOption(d, state, 'IN-APP', 'poll'),
                     ],
                   ),
@@ -177,6 +181,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _modeDetail(state.notifyMode),
                     style: d.prose.copyWith(fontSize: 13, color: d.ink3),
                   ),
+                  if (!Push.available) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'This build has no push of its own. The Herdr push '
+                      'plugin can send to the ntfy app instead.',
+                      style: d.prose.copyWith(fontSize: 13, color: d.ink3),
+                    ),
+                  ],
                   if (state.notifyMode == 'poll') ..._watchDetail(d),
                   if (state.notifyMode != 'off') ...[
                     const SizedBox(height: 18),

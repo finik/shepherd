@@ -56,3 +56,8 @@ dev_config.json
 android/app/google-services.json
 # Build-time secrets, such as the Bugsee token; tool/publish.sh passes them in.
 secrets.json
+# Where the release key is, and its passwords; the key itself lives outside
+# the repository.
+android/key.properties
+*.jks
+*.keystore

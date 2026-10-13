@@ -245,6 +245,22 @@ thumbnails; without either, pictures still open on demand.
 
 ---
 
+## Installing it
+
+Download the APK from [Releases](https://github.com/finik/shepherd/releases)
+on your phone and open it; Android asks once to allow installs from your
+browser. Then add a machine: host, user, and a key the app can generate for
+you, with the line to put in `authorized_keys`.
+
+The released build has no push of its own — push needs your own Firebase
+project, below — so notifications come from the app itself (In-app in
+Settings), or from the Herdr push plugin through the ntfy app. When it
+crashes, it sends a crash report to Bugsee: the error, the device model and
+Android version, and the app's recent log lines. It records no screen.
+
+Shepherd is a Flutter app; it has been built and used on Android only, and
+never on iOS.
+
 ## Running it
 
 ```bash
@@ -269,11 +285,15 @@ Pi reports that it is waiting on you only with the small extension in
 [`plugin/pi-herdr-prompts/`](plugin/pi-herdr-prompts/README.md) installed; without
 it a Pi question reads as working.
 
-Bug reports go to [Bugsee](https://bugsee.com) when the build is given a
+Crash reports go to [Bugsee](https://bugsee.com) when the build is given a
 token: put `{"BUGSEE_TOKEN": "…"}` in `secrets.json` at the top of the repo,
 which is ignored by git, and `tool/publish.sh` passes it in. A build without a
-token runs without Bugsee. With one, Bugsee records the screen, logs and network
-of the session it reports, which includes the transcripts on screen.
+token runs without Bugsee. Only crashes are reported, with recent log lines;
+the screen is never recorded and there is no report-a-bug gesture.
+
+`tool/release.sh` builds the public APK — without Firebase, signed with the
+release key named in `android/key.properties`, which stays out of git — and
+publishes it as a GitHub release.
 
 Push notifications need your own Firebase project: drop its
 `android/app/google-services.json` in place and link the plugin in
