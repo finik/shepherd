@@ -177,18 +177,24 @@ there are no bars and the cost is only a cost.
 
 <img src="docs/images/subscriptions.png" width="320" alt="Every limit of every plan: five-hour and weekly windows for Claude and Codex, a weekly one for Grok, each with how much is used and when it resets">
 
-**Open what the agent is serving.** A link an agent prints to a server it
-started — `http://localhost:8787` — opens on the phone, and so does any other
-server on the host, from the chat's menu: the one started in the agent's folder
-opens straight away, and otherwise the list has them first, or a port can be
-typed in. The same menu closes the page. The page travels through the SSH connection the app
-already holds, the same way `ssh -L` would carry it; on the phone it listens
-only on the phone itself, and nothing on the host is exposed to the network. The
-page slides in over the app and stays loaded when it is put away: a small lip
-on the right edge brings it back as it was, from any screen, and its twin on
-the page's left edge puts it away again, so the conversation and the page are
-a swipe apart. It also opens in Chrome, which
-reaches it while Shepherd keeps the connection.
+**Open what the agent is serving, in a browser inside the app.** When an agent
+starts a web server for what it built — a report, a dashboard, a tool to try —
+the link it prints, `http://localhost:8787`, opens the page in Shepherd, and you
+use it there: type, click, scroll, as on the desktop. The chat's menu opens it
+too: the server started in the agent's folder opens straight away, others are
+listed, and any port can be typed in. The same menu closes the page.
+
+The page slides in over the app and stays loaded when it is put away: a small
+lip on the right edge brings it back exactly as it was, from any screen, and
+its twin on the page's left edge puts it away again — the conversation and the
+result are a tap apart. It also opens in Chrome on the phone. Nothing on the
+host is exposed to the network: the page travels through the SSH connection
+the app already holds.
+
+<p>
+  <img src="docs/images/page-link.png" width="250" alt="A chat in which the agent has started a web server and printed its link; the lip on the right edge holds the page, put away">
+  <img src="docs/images/page.png" width="250" alt="The page open in Shepherd: an interactive savings planner served by the agent on the host, with the lip on its left edge back to the chat">
+</p>
 
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
 and dirty count for each agent's folder. More than one Herdr session on a host:
@@ -221,6 +227,11 @@ directory.
 OpenCode keeps its sessions in SQLite rather than in a file, so a helper copies
 each finished part, once, into an append-only JSONL mirror under
 `~/.shepherd/opencode/`, and the app reads and tails that like any transcript.
+
+A web page on the host is reached the way `ssh -L` would reach it: the app
+listens on the phone's own loopback address, on the host's port number where
+it is free, and carries each connection over the same SSH session to that port
+on the host.
 
 Nothing is installed on the host. The helper scripts that read transcripts are
 Dart string constants inside the APK, sent down the channel as heredocs on
