@@ -29,12 +29,12 @@ out=build/release
 rm -rf "$out" && mkdir -p "$out"
 
 # One APK for every phone, and a smaller one for 64-bit ARM, which is nearly
-# every phone in use.
+# every phone in use. Not --split-per-abi: that adds 1000 per ABI to the
+# version code, and a phone holding such a build refuses every later one.
 flutter build apk --release "${defines[@]}"
 cp build/app/outputs/flutter-apk/app-release.apk "$out/shepherd-$name.apk"
-flutter build apk --release --split-per-abi "${defines[@]}"
-cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-  "$out/shepherd-$name-arm64.apk"
+flutter build apk --release --target-platform android-arm64 "${defines[@]}"
+cp build/app/outputs/flutter-apk/app-release.apk "$out/shepherd-$name-arm64.apk"
 
 cat > "$out/notes.md" <<EOF
 **Install:** open this page on your Android phone, download
