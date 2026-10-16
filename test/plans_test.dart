@@ -160,6 +160,112 @@ void main() {
     expect(PlanUsage.fromList(run() as List), isEmpty);
   });
 
+  /// The Claude login on the host, as Claude Code keeps it.
+  void login(String account, {int profileFetchedAt = 0}) =>
+      File('${home.path}/.claude.json').writeAsStringSync(jsonEncode({
+        'oauthAccount': {
+          'accountUuid': account,
+          'organizationUuid': 'org',
+          'profileFetchedAt': profileFetchedAt,
+        },
+      }));
+
+  /// The status line of one session, written now, with when it last
+  /// carried each window.
+  Map<String, dynamic> statusLine(int fetched, Map<String, int> observed,
+          List<Map<String, dynamic>> windows) =>
+      {
+        'snapshot': {
+          'provider': 'claude',
+          'fetched_at_unix': fetched,
+          'windows': windows,
+          'session_quota_observations': {
+            's1': [
+              for (final e in observed.entries)
+                {'kind': e.key, 'observed_at_unix': e.value},
+            ],
+          },
+        },
+        'payload': {'session_id': 's1'},
+      };
+
+  test('a window is as old as the last time the status line carried it', () {
+    final future = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600;
+    // Rewritten just now, but its week was last reported long ago.
+    plugin('claude-statusline.observation', statusLine(2000, {
+      'five_hour': 2000,
+      'weekly': 1000,
+    }, [
+      {'kind': 'five_hour', 'used_percent': 1.0, 'resets_at': future},
+      {'kind': 'weekly', 'used_percent': 79.0, 'resets_at': future},
+    ]));
+    plugin('claude-statusline', statusLine(1500, {'weekly': 1500}, [
+      {'kind': 'weekly', 'used_percent': 40.0, 'resets_at': future},
+    ]));
+    codexbar(silent: true);
+    final claude = PlanUsage.fromList(run() as List).single;
+    expect(claude.windows.map((w) => w.usedPercent), [1, 40]);
+  });
+
+  test('another login drops what was read before it', () {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final future = now + 3600;
+    login('a');
+    plugin('claude-statusline', statusLine(now - 60, {
+      'five_hour': now - 60,
+      'weekly': now - 60,
+    }, [
+      {'kind': 'five_hour', 'used_percent': 9.0, 'resets_at': future},
+      {'kind': 'weekly', 'used_percent': 79.0, 'resets_at': future},
+    ]));
+    codexbar(silent: true);
+    expect(PlanUsage.fromList(run() as List).single.windows, hasLength(2));
+
+    // Signed in as someone else: neither the files nor the kept readings
+    // are theirs.
+    login('b');
+    expect(PlanUsage.fromList(run() as List), isEmpty);
+
+    // Their own status line reports only the five hours.
+    plugin('claude-statusline', statusLine(future, {
+      'five_hour': future,
+      'weekly': now - 60,
+    }, [
+      {'kind': 'five_hour', 'used_percent': 1.0, 'resets_at': future},
+      {'kind': 'weekly', 'used_percent': 79.0, 'resets_at': future},
+    ]));
+    final claude = PlanUsage.fromList(run() as List).single;
+    expect(claude.windows.single.minutes, 300);
+    expect(claude.windows.single.usedPercent, 1);
+  });
+
+  test('the first look counts from when the login read its profile', () {
+    final future = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 3600;
+    login('a', profileFetchedAt: 1500 * 1000);
+    plugin('claude-statusline', statusLine(2000, {
+      'five_hour': 2000,
+      'weekly': 1000,
+    }, [
+      {'kind': 'five_hour', 'used_percent': 1.0, 'resets_at': future},
+      {'kind': 'weekly', 'used_percent': 79.0, 'resets_at': future},
+    ]));
+    // Kept before any login was written down, under a time that is only
+    // the file's.
+    Directory('${home.path}/.shepherd').createSync();
+    File('${home.path}/.shepherd/plans-last.json').writeAsStringSync(jsonEncode({
+      'claude': {
+        '10080': {
+          'at': 2000,
+          'window': {'usedPercent': 79, 'minutes': 10080, 'resetsAt': null},
+        },
+      },
+    }));
+    codexbar(silent: true);
+    expect(
+        PlanUsage.fromList(run() as List).single.windows.map((w) => w.minutes),
+        [300]);
+  });
+
   test('CodexBar gives a window the plugin has not seen', () {
     plugin('claude-statusline', {
       'snapshot': {

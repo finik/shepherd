@@ -501,7 +501,38 @@ def snapshots():
             snap = data.get('snapshot', data)
             if isinstance(snap, dict) and isinstance(snap.get('windows'), list) \
                     and snap.get('provider'):
+                snap['_observed'] = observed(data, snap)
                 yield snap
+
+
+def observed(data, snap):
+    """When each window was last reported, by kind. The file is rewritten
+    on every status line, so its own time says nothing of a window the
+    status line has stopped carrying."""
+    payload = data.get('payload') if isinstance(data.get('payload'), dict) else {}
+    session = payload.get('session_id') or \
+        ((snap.get('context') or {}).get('cache') or {}).get('session_id')
+    seen = (snap.get('session_quota_observations') or {}).get(session) or []
+    return {o['kind']: o['observed_at_unix'] for o in seen
+            if isinstance(o, dict) and isinstance(o.get('observed_at_unix'), (int, float))}
+
+
+def claude_account():
+    """The Claude login on the host and when its profile was last read; a
+    quota is the account's, so another login makes every reading old."""
+    for path in (os.path.join(home, '.claude.json'),
+                 os.path.join(home, '.claude', '.claude.json')):
+        try:
+            with open(path) as handle:
+                account = json.load(handle).get('oauthAccount') or {}
+        except Exception:
+            continue
+        uuid = account.get('accountUuid')
+        if uuid:
+            fetched = account.get('profileFetchedAt')
+            return ('%s/%s' % (uuid, account.get('organizationUuid') or ''),
+                    fetched / 1000 if isinstance(fetched, (int, float)) else 0)
+    return None, 0
 
 
 if sys.argv[1:] == ['check']:
@@ -516,17 +547,48 @@ def iso(unix):
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(unix)) if unix else None
 
 
+LAST = os.path.join(home, '.shepherd', 'plans-last.json')
+try:
+    with open(LAST) as handle:
+        last = json.load(handle)
+except Exception:
+    last = {}
+if not isinstance(last, dict):
+    last = {}
+accounts = last.pop('_accounts', None)
+if not isinstance(accounts, dict):
+    accounts = {}
+now = time.time()
+
+# Readings from before the current login are another account's. A new login
+# counts from when it is first seen; the first look at all counts from when
+# the profile was last read, which a login does.
+since = {}
+account, profile_at = claude_account()
+if account:
+    seen = accounts.get('claude') if isinstance(accounts.get('claude'), dict) else {}
+    if seen.get('id') == account:
+        since['claude'] = seen.get('since') or 0
+    else:
+        since['claude'] = now if seen.get('id') else profile_at
+        # Kept under another login, or under none that was written down.
+        last.pop('claude', None)
+    accounts['claude'] = {'id': account, 'since': since['claude']}
+
 # Each window by itself: the plugin writes a provider's quota from whichever
 # session spoke last, and one session may report the week but not the five
 # hours. The newest reading of each window stands.
 plans = {}
 for snap in snapshots():
     provider = snap['provider']
-    at = snap.get('fetched_at_unix') or 0
+    fetched = snap.get('fetched_at_unix') or 0
     plan = plans.setdefault(provider, {'provider': provider, 'plan': '',
                                        'windows': {}, '_at': 0})
     for w in snap['windows']:
         if not isinstance(w, dict) or not isinstance(w.get('used_percent'), (int, float)):
+            continue
+        at = snap['_observed'].get(w.get('kind')) or fetched
+        if at < since.get(provider, 0):
             continue
         minutes = w['duration_seconds'] // 60 if w.get('duration_seconds') \
             else KINDS.get(w.get('kind'))
@@ -545,13 +607,6 @@ for snap in snapshots():
 # files, with no windows in them, until another session writes again. The
 # quota is the account's, so the last reading of each window stands until
 # that window resets; it is kept here for when the files have none.
-LAST = os.path.join(home, '.shepherd', 'plans-last.json')
-try:
-    with open(LAST) as handle:
-        last = json.load(handle)
-except Exception:
-    last = {}
-now = time.time()
 for provider, windows in last.items():
     if not isinstance(windows, dict):
         continue
@@ -569,16 +624,18 @@ for provider, windows in last.items():
                 time.strptime(reset[:19], '%Y-%m-%dT%H:%M:%S')) < now
         except Exception:
             ended = False
-        if ended:
+        if ended or (kept.get('at') or 0) < since.get(provider, 0):
             continue
         plan['windows'][key] = (kept.get('at') or 0, kept['window'])
         plan['_at'] = max(plan['_at'], kept.get('at') or 0)
 try:
     os.makedirs(os.path.dirname(LAST), exist_ok=True)
     with open(LAST + '.tmp', 'w') as handle:
-        json.dump({p: {str(k): {'at': at, 'window': w}
-                       for k, (at, w) in plan['windows'].items()}
-                   for p, plan in plans.items()}, handle)
+        kept = {p: {str(k): {'at': at, 'window': w}
+                    for k, (at, w) in plan['windows'].items()}
+                for p, plan in plans.items()}
+        kept['_accounts'] = accounts
+        json.dump(kept, handle)
     os.replace(LAST + '.tmp', LAST)
 except Exception:
     pass
