@@ -2300,6 +2300,9 @@ main()''';
 
   static bool _isOpencodeId(String id) => RegExp(r'^ses_[A-Za-z0-9]+$').hasMatch(id);
 
+  @visibleForTesting
+  static String get windowScriptForTest => '$_thumbnailPython\n$_windowPython';
+
   /// Read a window of the transcript with the image payloads taken out.
   ///
   /// A screenshot is 180KB of base64 inside a single record; a dozen of them
@@ -2342,15 +2345,32 @@ def records(start):
 def said(record):
     # What a person typed, in whichever shape the agent writes.
     message = record.get('message')
-    if isinstance(message, dict) and message.get('role') == 'user':
+    # Claude's `user` records and Pi's `message` ones; Claude also keeps a
+    # copy of each request it sends, which is not what anyone said.
+    if isinstance(message, dict) and message.get('role') == 'user' \
+            and record.get('type') in ('user', 'message'):
         content = message.get('content')
         if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            return ' '.join(
+            text = content
+        elif isinstance(content, list):
+            text = ' '.join(
                 b.get('text', '') for b in content
                 if isinstance(b, dict) and b.get('type') == 'text')
-        return ''
+        else:
+            return ''
+        # A compaction starts a turn of its own on the phone.
+        if record.get('isCompactSummary'):
+            return text
+        # Claude writes more than what you typed as user messages: its own
+        # notes, a background task or another session reporting in, a slash
+        # command. The phone starts no turn at them, so neither does this:
+        # a window of nothing else would hold no conversation at all.
+        stripped = text.lstrip()
+        if record.get('isMeta') or record.get('promptSource') == 'system' \
+                or stripped.startswith(('<task-notification>', '<command-name>',
+                                        '<local-command', '[Request interrupted')):
+            return ''
+        return text
     # Codex: the conversation is inside response_item payloads, and the first
     # user messages are the harness handing the model its environment.
     payload = record.get('payload')
@@ -2455,6 +2475,10 @@ def shrink(value, depth=0):
 
 prepared = []
 for here, record in found[cut:]:
+    # Claude's copies of what it sent the API: the whole request again,
+    # system prompt included, and nothing the phone reads.
+    if str(record.get('type', '')).startswith('api-request'):
+        continue
     record = shrink(record)
     record['__abs'] = here
     prepared.append(record)
