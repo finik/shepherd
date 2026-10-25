@@ -461,6 +461,12 @@ void main() {
       final asked = AppState.parsePrompt(answered);
       expect(asked.question, isEmpty);
       expect(asked.choices, isEmpty);
+      // So the pane is not waiting on you, whatever Herdr reports.
+      expect(AppState.awaitsPrompt(answered), isTrue);
+    });
+
+    test('a live menu is waiting on you', () {
+      expect(AppState.awaitsPrompt(menu), isFalse);
     });
   });
 

@@ -100,8 +100,39 @@ const _defaultSocketSuffix = '.config/herdr/herdr.sock';
 class AppState extends ChangeNotifier {
   ConnState conn = ConnState.idle;
   String? error;
-  HostState host = const HostState();
   String? selectedPaneId;
+
+  /// The host as Herdr reports it.
+  HostState _reported = const HostState();
+  HostState _host = const HostState();
+
+  /// Panes Herdr reports as waiting on you while their screen shows the
+  /// input box: Herdr took something the agent wrote for a question.
+  final Set<String> _notAsking = {};
+
+  /// The host as shown: what Herdr reports, except that a pane it takes to
+  /// be asking, whose screen shows it is not, is idle.
+  HostState get host => _host;
+  set host(HostState value) {
+    _reported = value;
+    _notAsking.removeWhere((id) => !value.panes
+        .any((p) => p.paneId == id && p.agentStatus == 'blocked'));
+    if (_notAsking.isEmpty) {
+      _host = value;
+      return;
+    }
+    Pane shown(Pane p) =>
+        _notAsking.contains(p.paneId) ? p.withStatus('idle') : p;
+    _host = HostState(
+      workspaces: value.workspaces,
+      tabs: value.tabs,
+      panes: value.panes.map(shown).toList(),
+      agents: value.agents.map(shown).toList(),
+      focusedWorkspaceId: value.focusedWorkspaceId,
+      focusedTabId: value.focusedTabId,
+      focusedPaneId: value.focusedPaneId,
+    );
+  }
 
   List<Turn> turns = const [];
 
@@ -1148,7 +1179,7 @@ print('@@@' + json.dumps(list(plans.values())))''';
       if (snap == null) return;
       _pollFailures = 0;
       final before = selectedPane?.agentSession?.value;
-      final changed = _statusesDiffer(host, snap);
+      final changed = _statusesDiffer(_reported, snap);
       host = snap;
       if (changed) notifyListeners();
       if (selectedPane?.agentSession?.value != before) {
@@ -3148,7 +3179,7 @@ if found:
     // A question takes the place of the input box. With the box drawn at the
     // bottom — a rule, then the prompt, empty or holding a suggestion —
     // nothing is being asked, whatever the text above it reads like.
-    if (_awaitsPrompt(plain, option)) {
+    if (_awaitsPrompt(plain)) {
       return (question: '', choices: const <Choice>[]);
     }
 
@@ -3286,9 +3317,18 @@ if found:
     return (question: question, choices: choices);
   }
 
+  /// Whether [raw], a pane's screen, ends in Claude's input box: the agent
+  /// is waiting for a prompt, not for an answer.
+  @visibleForTesting
+  static bool awaitsPrompt(String raw) => _awaitsPrompt([
+        for (final l in raw.split(RegExp(r'\r?\n')))
+          l.replaceAll(RegExp(r'\x1b\[[0-9;?]*[A-Za-z]'), '')
+      ]);
+
   /// Whether the screen ends in Claude's input box: a full rule with the
   /// prompt on the line right under it, and no option anywhere below.
-  static bool _awaitsPrompt(List<String> plain, RegExp option) {
+  static bool _awaitsPrompt(List<String> plain) {
+    final option = RegExp(r'^[\s❯›>▸▶→*•]*(\d)[.)]\s+(.+)$');
     for (var i = plain.length - 1; i > 0; i--) {
       final line = plain[i].trim();
       if (option.hasMatch(line)) return false;
@@ -3805,7 +3845,7 @@ if found:
     // Only panes the agent itself reports as waiting are read: the screen is
     // where the question is, not where Shepherd learns that there is one.
     final blocked =
-        host.panes.where((p) => p.agentStatus == 'blocked').toList();
+        _reported.panes.where((p) => p.agentStatus == 'blocked').toList();
     _blockedPrompts.removeWhere(
         (id, _) => !blocked.any((p) => p.paneId == id));
     for (final pane in blocked) {
@@ -3814,6 +3854,13 @@ if found:
         // over the pane and never becomes output.
         final text = await rpc.readPane(pane.paneId,
             source: 'visible', lines: 30, ansi: true);
+        final changed = awaitsPrompt(text)
+            ? _notAsking.add(pane.paneId)
+            : _notAsking.remove(pane.paneId);
+        if (changed) {
+          host = _reported;
+          notifyListeners();
+        }
         final asked = parsePrompt(text);
         if (asked.question.isEmpty && asked.choices.isEmpty) continue;
         final held = _blockedPrompts[pane.paneId];
@@ -4792,13 +4839,13 @@ for name in names:
     if (selectedPaneId == paneId) selectedPaneId = null;
     _blockedPrompts.remove(paneId);
     host = HostState(
-      workspaces: host.workspaces,
-      tabs: host.tabs,
-      panes: host.panes.where((p) => p.paneId != paneId).toList(),
-      agents: host.agents.where((p) => p.paneId != paneId).toList(),
-      focusedWorkspaceId: host.focusedWorkspaceId,
-      focusedTabId: host.focusedTabId,
-      focusedPaneId: host.focusedPaneId,
+      workspaces: _reported.workspaces,
+      tabs: _reported.tabs,
+      panes: _reported.panes.where((p) => p.paneId != paneId).toList(),
+      agents: _reported.agents.where((p) => p.paneId != paneId).toList(),
+      focusedWorkspaceId: _reported.focusedWorkspaceId,
+      focusedTabId: _reported.focusedTabId,
+      focusedPaneId: _reported.focusedPaneId,
     );
     notifyListeners();
     return true;
