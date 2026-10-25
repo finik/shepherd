@@ -3145,6 +3145,13 @@ if found:
       lines.add(line.trimRight());
     }
 
+    // A question takes the place of the input box. With the box drawn at the
+    // bottom — a rule, then the prompt, empty or holding a suggestion —
+    // nothing is being asked, whatever the text above it reads like.
+    if (_awaitsPrompt(plain, option)) {
+      return (question: '', choices: const <Choice>[]);
+    }
+
     // Find the menu first: a run of options numbered from one, each on its
     // own line. Anything numbered that does not continue the run is not part
     // of it — a diff above the menu has line numbers too.
@@ -3277,6 +3284,18 @@ if found:
     final question =
         command.isEmpty ? block[at] : '${block[at]}\n$command';
     return (question: question, choices: choices);
+  }
+
+  /// Whether the screen ends in Claude's input box: a full rule with the
+  /// prompt on the line right under it, and no option anywhere below.
+  static bool _awaitsPrompt(List<String> plain, RegExp option) {
+    for (var i = plain.length - 1; i > 0; i--) {
+      final line = plain[i].trim();
+      if (option.hasMatch(line)) return false;
+      if (!RegExp(r'^❯(\s|$)').hasMatch(line)) continue;
+      return RegExp(r'^─{20,}$').hasMatch(plain[i - 1].trim());
+    }
+    return false;
   }
 
   /// A menu of unnumbered options, each behind a radio mark: omp's

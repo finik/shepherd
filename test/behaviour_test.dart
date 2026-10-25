@@ -441,6 +441,27 @@ void main() {
       expect(asked.choices.first.label, 'Add an emulator key');
       expect(asked.choices.first.detail, isEmpty);
     });
+
+    test('an answer that ends in a question asks nothing', () {
+      // The reply lists steps and asks which way to go, and the input box
+      // below holds Claude's suggestion for what to say next. Nothing is
+      // waiting on a key.
+      const answered =
+          '  To let me control it:\n'
+          '  1. In OctoPrint, go to Settings → Application Keys and create a key.\n'
+          '  2. Give it to me through the shell so it stays out of the chat history:\n'
+          '  3. Then I can read printer status and start prints.\n'
+          '\n'
+          '  Which way do you want to go?\n'
+          '\n'
+          '✻ Brewed for 19s · done 4:58 PM\n'
+          '──────────────────────────────────────────────────────────────────────\n'
+          '❯ \x1b[0m\x1b[2mslice the test pieces and print them on the ender\x1b[0m\n'
+          '             142049in 538out | ctx:14.0% | v4-redesign\n';
+      final asked = AppState.parsePrompt(answered);
+      expect(asked.question, isEmpty);
+      expect(asked.choices, isEmpty);
+    });
   });
 
   group('upload progress', () {
