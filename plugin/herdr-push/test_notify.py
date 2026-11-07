@@ -194,6 +194,87 @@ with tempfile.TemporaryDirectory() as tmp:
     check("both panes kept", stored == {"w1:p1": "working", "w1:p2": "blocked"})
     check("no temp files left", os.listdir(tmp) == ["last-status.json"])
 
+print("\na change that is not news is still the state it changed to")
+with tempfile.TemporaryDirectory() as tmp:
+    sent = []
+    notify.send_ntfy = lambda url, title, body: sent.append((title, body))
+    with open(os.path.join(tmp, "config.json"), "w") as handle:
+        json.dump({"url": "https://ntfy.invalid/t"}, handle)
+    original = notify.read_snapshot
+    notify.read_snapshot = lambda _h: {"panes": [
+        {"pane_id": "t3", "label": "ledger", "agent_status": "done"}]}
+    notify.handle("t3", "idle", tmp, tmp)
+    notify.handle("t3", "working", tmp, tmp)
+    check("starting to work is not sent", sent == [])
+    notify.handle("t3", "done", tmp, tmp)
+    check("finishing after it is", sent == [("ledger", "Finished")])
+    notify.read_snapshot = original
+
+# A stand-in for herdr-core's `hc`: canned replies to `connect`, and a
+# snapshot and two changes from `events`.
+FAKE_HC = r"""#!/usr/bin/env python3
+import json, sys
+terminals = [
+    {"address": "t3", "state": "live", "title": "Scanning",
+     "labels": {"herdr.space": "sp1", "herdr.tab": "tb1"},
+     "status": {"app": "claude-code", "state": "working"},
+     "foreground": {"argv": ["claude"], "cwd": "/w/ledger", "pid": 4242}},
+    {"address": "t4", "state": "live", "labels": {},
+     "foreground": {"argv": ["zsh"], "cwd": "/w"}},
+]
+if sys.argv[1] == "connect":
+    results = {1: {}, 2: {"terminals": terminals},
+               3: {"value": {"spaces": [{"id": "sp1", "name": "ledger",
+                                          "tabs": [{"id": "tb1", "name": ""}]}]}}}
+    for line in sys.stdin:
+        request = json.loads(line)
+        print(json.dumps({"id": request["id"], "result": results[request["id"]]}),
+              flush=True)
+elif sys.argv[1] == "events":
+    print(json.dumps({"seq": 1, "terminals": terminals}))
+    print(json.dumps({"type": "status", "terminal": "t3",
+                      "data": {"status": {"app": "claude-code", "state": "done"}}}))
+    print(json.dumps({"type": "turn", "terminal": "t3", "data": {"turn": 2}}))
+"""
+
+print("\nherdr-core read as Herdr is")
+with tempfile.TemporaryDirectory() as tmp:
+    fake = os.path.join(tmp, "hc")
+    with open(fake, "w") as handle:
+        handle.write(FAKE_HC)
+    os.chmod(fake, 0o755)
+    os.makedirs(os.path.join(tmp, ".claude", "sessions"))
+    with open(os.path.join(tmp, ".claude", "sessions", "4242.json"), "w") as h:
+        json.dump({"pid": 4242, "sessionId": "5f1c2e7a"}, h)
+    home, original_bin = os.environ.get("HOME"), notify.hc_bin
+    os.environ["HOME"] = tmp
+    notify.hc_bin = lambda: fake
+    try:
+        panes = {p["pane_id"]: p for p in notify.core_snapshot()["panes"]}
+        check("a Claude terminal is a claude pane",
+              panes["t3"]["agent"] == "claude"
+              and panes["t3"]["agent_status"] == "working")
+        check("named as its space is",  panes["t3"]["label"] == "ledger")
+        check("its session from Claude's own file",
+              panes["t3"]["agent_session"] == {"kind": "id",
+                                               "value": "5f1c2e7a"})
+        check("a shell is no agent", panes["t4"]["agent"] is None)
+
+        sent = []
+        notify.send_ntfy = lambda url, title, body: sent.append((title, body))
+        notify.STATE_DIR = os.path.join(tmp, "state")
+        notify.CONFIG_DIR = os.path.join(tmp, "config")
+        os.makedirs(notify.CONFIG_DIR)
+        with open(os.path.join(notify.CONFIG_DIR, "config.json"), "w") as h:
+            json.dump({"url": "https://ntfy.invalid/t"}, h)
+        notify.follow_core(once=True)
+        check("working in the snapshot, done in an event: finished",
+              sent == [("ledger", "Finished")])
+    finally:
+        os.environ["HOME"] = home or ""
+        notify.hc_bin = original_bin
+        notify.SOURCE = "herdr"
+
 print()
 if failures:
     print(f"{len(failures)} failed: " + ", ".join(failures))

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Send a notification when an agent stops.
 
-Run by Herdr as a `pane.agent_status_changed` event hook, so there is no
-polling and no daemon: the hook fires the moment the state changes, decides
-whether the change is worth saying, and posts it.
+Under Herdr it runs as a `pane.agent_status_changed` event hook: the hook
+fires the moment the state changes, decides whether the change is worth
+saying, and posts it. Under herdr-core, `notify.py --core` follows the
+core's events and decides the same way for each change.
 
 Configuration lives in the plugin's config directory as `config.json`:
 
@@ -26,7 +27,18 @@ TIMEOUT = 10
 OPENCODE_DB = "~/.local/share/opencode/opencode.db"
 
 
+# Where Herdr keeps this plugin's settings and state. The core has no plugin
+# directories of its own, and the phone writes its settings here.
+CONFIG_DIR = "~/.config/herdr/plugins/config/shepherd.push"
+STATE_DIR = "~/.local/state/herdr/plugins/shepherd.push"
+
+# "herdr" when run as a hook, "core" when following herdr-core.
+SOURCE = "herdr"
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--core"]:
+        return follow_core()
     event = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON") or "{}")
     # The envelope carries the event name; the fields are in `data`.
     data = event.get("data") if isinstance(event.get("data"), dict) else event
@@ -34,36 +46,44 @@ def main() -> int:
     status = data.get("agent_status")
     if not pane_id or not status:
         return 0
+    handle(pane_id, status,
+           os.environ.get("HERDR_PLUGIN_STATE_DIR") or ".",
+           os.environ.get("HERDR_PLUGIN_CONFIG_DIR") or ".")
+    return 0
 
-    # Herdr reports the new state; whether it is news depends on the old one,
-    # so the hook keeps the last state it saw per pane.
-    state_dir = os.environ.get("HERDR_PLUGIN_STATE_DIR") or "."
+
+def handle(pane_id: str, status: str, state_dir: str, config_dir: str) -> None:
+    """Decide whether this change is news, and send it if so."""
+    _snapshot_cache.clear()
+    # The host reports the new state; whether it is news depends on the old
+    # one, so the last state seen is kept per pane.
     os.makedirs(state_dir, exist_ok=True)
     state_path = os.path.join(state_dir, "last-status.json")
     seen = read_json(state_path)
     before = seen.get(pane_id)
 
     body = worth_saying(before, status)
-    # Herdr keeps stderr per run, so say what was decided: a notification that
-    # never arrived can then be traced to the transition behind it.
+    # Say what was decided: a notification that never arrived can then be
+    # traced to the transition behind it.
     print(f"{pane_id}: {before} -> {status} = {body or 'nothing to say'}",
           file=sys.stderr)
     if body is None:
-        return 0
+        if before != status:
+            remember(state_path, pane_id, status)
+        return
 
     # An agent whose approvals a model reviews reports blocked for a moment
     # on every tool call and moves on by itself. A question worth a
     # notification is still waiting a few seconds later.
     if status == "blocked" and not still_blocked(pane_id):
         print(f"{pane_id}: blocked only briefly; not news", file=sys.stderr)
-        return 0
+        return
 
     # A question waits indefinitely and produces no further event, so
     # suppressing it means nobody is ever told. Only "finished" is worth
     # staying quiet about.
     suppressible = status != "blocked"
 
-    config_dir = os.environ.get("HERDR_PLUGIN_CONFIG_DIR") or "."
     config = read_json(os.path.join(config_dir, "config.json"))
 
     # No point telling you about an agent you are sitting in front of. The
@@ -77,7 +97,7 @@ def main() -> int:
                   file=sys.stderr)
             # Deliberately not recorded: leaving `before` where it was means
             # the next event still reads as news rather than as already told.
-            return 0
+            return
     remember(state_path, pane_id, status)
 
     title = pane_title(pane_id)
@@ -88,7 +108,144 @@ def main() -> int:
         send_ntfy(config["url"], title, body)
     else:
         print("nothing configured; nothing sent", file=sys.stderr)
-    return 0
+
+
+def hc_bin() -> str:
+    """The core's command: on the PATH, else where its installer puts it."""
+    import shutil
+
+    return (shutil.which("hc")
+            or os.path.expanduser("~/.local/bin/hc"))
+
+
+# The agents the app knows, by the name each reports itself under.
+CORE_AGENTS = {"claude-code": "claude", "claude": "claude", "codex": "codex",
+               "pi": "pi", "omp": "omp", "opencode": "opencode",
+               "muse": "muse"}
+
+
+def core_status(terminal: dict):
+    """The agent's own word for its state; an error wants a look."""
+    state = (terminal.get("status") or {}).get("state")
+    return "done" if state == "error" else state
+
+
+def follow_core(once: bool = False) -> int:
+    """Follow herdr-core's events and decide on each change of state.
+
+    The first line is a snapshot. A state seen there is a first sighting,
+    recorded so that the next change reads against it. When the core goes
+    away (an update restarts it) the follow starts again; with [once] it
+    ends there.
+    """
+    global SOURCE
+    SOURCE = "core"
+    state_dir = os.path.expanduser(STATE_DIR)
+    config_dir = os.path.expanduser(CONFIG_DIR)
+    os.makedirs(state_dir, exist_ok=True)
+    state_path = os.path.join(state_dir, "last-status.json")
+    while True:
+        try:
+            events = subprocess.Popen([hc_bin(), "events"],
+                                      stdout=subprocess.PIPE, text=True)
+        except OSError as e:
+            print(f"no herdr-core: {e}", file=sys.stderr)
+            time.sleep(30)
+            continue
+        first = True
+        for line in events.stdout:
+            try:
+                message = json.loads(line)
+            except ValueError:
+                continue
+            if first:
+                first = False
+                seen = {}
+                for terminal in message.get("terminals") or []:
+                    status = core_status(terminal)
+                    if status and terminal.get("address"):
+                        seen[terminal["address"]] = status
+                write_json(state_path, seen)
+                continue
+            if message.get("type") != "status":
+                continue
+            status = core_status(message.get("data") or {})
+            if status and message.get("terminal"):
+                try:
+                    handle(message["terminal"], status, state_dir, config_dir)
+                except Exception as e:
+                    print(f"{message['terminal']}: {e}", file=sys.stderr)
+        events.wait()
+        if once:
+            return 0
+        print("herdr-core events ended; following again", file=sys.stderr)
+        time.sleep(5)
+
+
+def core_snapshot() -> dict:
+    """The core's terminals in the shape Herdr's snapshot has, so everything
+    that reads a snapshot reads either.
+
+    A terminal's name is the one you gave its tab or space in the app; a
+    Claude terminal's session comes from the file Claude Code keeps for its
+    process.
+    """
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "hello",
+         "params": {"generation": 1}},
+        {"jsonrpc": "2.0", "id": 2, "method": "terminal.list", "params": {}},
+        {"jsonrpc": "2.0", "id": 3, "method": "doc.get",
+         "params": {"name": "herdr-app"}},
+    ]
+    process = subprocess.Popen([hc_bin(), "connect"], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, text=True)
+    replies = {}
+    try:
+        for request in requests:
+            process.stdin.write(json.dumps(request) + "\n")
+        process.stdin.flush()
+        deadline = time.time() + TIMEOUT
+        while len(replies) < len(requests) and time.time() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                break
+            message = json.loads(line)
+            if "id" in message:
+                replies[message["id"]] = message.get("result") or {}
+    finally:
+        process.kill()
+        process.wait()
+
+    names = {}
+    for space in ((replies.get(3) or {}).get("value") or {}).get("spaces", []):
+        for tab in space.get("tabs", []):
+            names[tab.get("id")] = tab.get("name") or space.get("name") or ""
+    panes = []
+    for terminal in (replies.get(2) or {}).get("terminals", []):
+        if terminal.get("state") != "live":
+            continue
+        foreground = terminal.get("foreground") or {}
+        app = (terminal.get("status") or {}).get("app")
+        argv = foreground.get("argv") or [""]
+        agent = (CORE_AGENTS.get(app, app) if app
+                 else CORE_AGENTS.get(argv[0].split("/")[-1]))
+        pane = {
+            "pane_id": terminal.get("address"),
+            "agent": agent,
+            "agent_status": core_status(terminal),
+            "cwd": foreground.get("cwd") or terminal.get("cwd"),
+            "label": names.get((terminal.get("labels") or {})
+                               .get("herdr.tab"), ""),
+            "terminal_title_stripped": terminal.get("title") or "",
+        }
+        if agent == "claude" and foreground.get("pid"):
+            session = read_json(os.path.expanduser(
+                f"~/.claude/sessions/{foreground['pid']}.json"))
+            if session.get("sessionId"):
+                pane["agent_session"] = {"kind": "id",
+                                         "value": session["sessionId"]}
+        panes.append(pane)
+    return {"panes": panes}
 
 
 BLOCKED_SETTLE_SECONDS = 3
@@ -387,24 +544,29 @@ def parse_time(value):
 
 
 def remember(state_path: str, pane_id: str, status: str) -> None:
-    """Record a status we acted on, atomically.
+    """Record a status, atomically.
 
     One process per event means two panes changing at once are two processes
     reading and rewriting the same map; a temp-and-rename at least keeps the
     file valid, and losing one update costs a repeated notification rather
     than a corrupt map that makes every pane a first sighting again.
     """
-    import tempfile
-
     seen = read_json(state_path)
     seen[pane_id] = status
-    directory = os.path.dirname(state_path) or "."
+    write_json(state_path, seen)
+
+
+def write_json(path: str, value: dict) -> None:
+    """Swap the file in whole: a reader sees the old map or the new one."""
+    import tempfile
+
+    directory = os.path.dirname(path) or "."
     try:
         handle = tempfile.NamedTemporaryFile(
             "w", dir=directory, delete=False)
         with handle:
-            json.dump(seen, handle)
-        os.replace(handle.name, state_path)
+            json.dump(value, handle)
+        os.replace(handle.name, path)
     except Exception:
         pass
 
@@ -428,6 +590,11 @@ _snapshot_cache = {}
 
 
 def read_snapshot(herdr: str) -> dict:
+    if "value" not in _snapshot_cache and SOURCE == "core":
+        try:
+            _snapshot_cache["value"] = core_snapshot()
+        except Exception:
+            _snapshot_cache["value"] = {}
     if "value" not in _snapshot_cache:
         try:
             out = subprocess.run([herdr, "api", "snapshot"],

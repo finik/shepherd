@@ -3,8 +3,8 @@
 **Herdr is the right way to run coding agents. A terminal is the wrong way to
 read them on a phone.**
 
-[Herdr](https://herdr.dev) keeps Claude Code, Pi, Codex, OpenCode, muse and friends in panes on
-your machine, where your files and your keys and your build already are. That is
+[Herdr](https://herdr.dev) — the desktop app or Herdr TUI — keeps Claude
+Code, Pi, Codex, OpenCode, muse and friends in panes on your machine, where your files and your keys and your build already are. That is
 where they belong. But when you are away from the desk and you want to know what
 an agent decided — or it is stuck waiting on a yes — the answer is not a
 terminal emulator on a 4-inch screen. Pinch-zooming an alt-screen TUI, hunting
@@ -103,7 +103,7 @@ suits you depends on whether you want to set up Firebase.
 
 | | **Push** | **In-app** |
 |---|---|---|
-| How | A Herdr plugin on the host fires on `pane.agent_status_changed` and sends through Firebase | A foreground service on the phone watches the host itself, every ten seconds |
+| How | On the host, a Herdr plugin fires on `pane.agent_status_changed`, or a follower of herdr-core's events sees the change, and sends through Firebase | A foreground service on the phone watches the host itself, every ten seconds |
 | Setup | Your own Firebase project — `google-services.json` in the app, a service account on the host | None |
 | Battery | None; the phone is only woken when there is something to say | Real: the service and its connection stay up |
 | Survives | The app being closed, the phone sleeping, a reboot | Neither a force-quit nor a reboot; Android also keeps a permanent notification up while it runs |
@@ -206,14 +206,24 @@ can watch separate sets of agents.
 ## How it connects
 
 ```
-  phone ──SSH──▶ host ──unix socket──▶ herdr
+  phone ──SSH──▶ host ──▶ hc connect (herdr-core)
+                  │   └─▶ unix socket ──▶ herdr (Herdr TUI)
                   │
                   ├──▶ ~/.claude/…/*.jsonl  ~/.pi/…/*.jsonl  ~/.omp/…/*.jsonl
                   ├──▶ ~/.codex/sessions/…/*.jsonl  ~/.local/share/muse/sessions/…/session.jsonl
                   └──▶ ~/.local/share/opencode/opencode.db
 ```
 
-One SSH connection does everything. Herdr's Unix socket is forwarded over it
+One SSH connection does everything. Where the host has herdr-core, which the
+Herdr app runs its terminals in, one channel runs `hc connect` and speaks its
+JSON-RPC: `terminal.list` and the app's layout document for the spaces, tabs
+and terminals, `events.subscribe` for every change, `terminal.send` and
+`terminal.keys` to type. Each agent reports its own state to the core, so
+whether it is working, finished or waiting on you is its word, not a guess
+from the screen. Claude Code's session comes from the file it keeps for its
+process under `~/.claude/sessions/`.
+
+With Herdr TUI, Herdr's Unix socket is forwarded over the connection
 (`direct-streamlocal@openssh.com`) and spoken to in newline-delimited JSON:
 `session.snapshot` for the topology, `events.subscribe` for changes,
 `pane.send_input` to type into a pane. Herdr also tells us where each pane's
@@ -240,7 +250,8 @@ The subscription bars are the exception that proves it: they appear only when
 the host already has a reader of its own, the herdr-agent-usage plugin or
 CodexBar.
 
-Your host needs: `sshd`, Herdr 0.9+, and Python 3. Pillow or `sips` if you want
+Your host needs: `sshd`, the Herdr app (herdr-core 0.1.18+) or Herdr TUI
+0.9+, and Python 3. Pillow or `sips` if you want
 thumbnails; without either, pictures still open on demand.
 
 ---
@@ -296,8 +307,8 @@ release key named in `android/key.properties`, which stays out of git — and
 publishes it as a GitHub release.
 
 Push notifications need your own Firebase project: drop its
-`android/app/google-services.json` in place and link the plugin in
-[`plugin/herdr-push/`](plugin/herdr-push/README.md) into Herdr. Without it,
+`android/app/google-services.json` in place and set up
+[`plugin/herdr-push/`](plugin/herdr-push/README.md) on the host. Without it,
 in-app notifications work on their own.
 
 There is also a headless check of the whole transport, useful when something
