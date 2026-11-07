@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../herdr/client.dart';
+import '../herdr/host_client.dart';
 import '../herdr/models.dart';
 import 'machines.dart';
 
@@ -45,7 +45,7 @@ class AgentWatcher extends TaskHandler {
   final _store = MachineStore();
 
   SSHClient? _ssh;
-  HerdrClient? _rpc;
+  HostClient? _rpc;
 
   /// Last status seen per pane. The first poll only establishes this — an
   /// agent that finished before the service started is not news.
@@ -111,7 +111,7 @@ class AgentWatcher extends TaskHandler {
       }
       if (home.isEmpty) home = '/home/${machine.user}';
       _ssh = ssh;
-      _rpc = HerdrClient(ssh, '$home/$_socketSuffix');
+      _rpc = await HostClient.open(ssh, '$home/$_socketSuffix');
     } catch (_) {
       _ssh?.close();
       _ssh = null;

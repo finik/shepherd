@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
+import 'host_client.dart';
 import 'models.dart';
 
 /// Newline-delimited JSON to a Herdr server over forwarded Unix sockets.
@@ -12,7 +13,7 @@ import 'models.dart';
 /// so every call opens its own forwarded channel. The exception is
 /// `events.subscribe`, which keeps its connection open and streams events —
 /// that one gets a dedicated long-lived channel via [subscribe].
-class HerdrClient {
+class HerdrClient implements HostClient {
   final SSHClient _ssh;
   final String socketPath;
   int _nextId = 1;
@@ -159,6 +160,13 @@ class HerdrClient {
     }
   }
 
+  @override
+  Future<String> ping() async {
+    final pong = await call('ping');
+    return 'HERDR ${pong['version'] ?? '?'}';
+  }
+
+  @override
   Future<HostState> snapshot() async {
     final res = await call('session.snapshot');
     final snap = res['snapshot'] as Map<String, dynamic>?;
@@ -166,6 +174,7 @@ class HerdrClient {
     return HostState.fromSnapshot(snap);
   }
 
+  @override
   Future<void> focusPane(Pane pane) async {
     await call('workspace.focus', {'workspace_id': pane.workspaceId});
     await call('tab.focus', {'tab_id': pane.tabId});
@@ -173,6 +182,7 @@ class HerdrClient {
   }
 
   /// A null label clears it and lets Herdr fall back to its own naming.
+  @override
   Future<void> renamePane(String paneId, String? label) => call(
         'pane.rename',
         {'pane_id': paneId, if (label != null) 'label': label},
@@ -181,21 +191,39 @@ class HerdrClient {
   Future<void> sendText(String paneId, String text) =>
       call('pane.send_input', {'pane_id': paneId, 'text': text});
 
+  /// A beat before the return key: Codex and muse ignore an Enter that
+  /// arrives while they are still taking in the pasted text. The others do
+  /// not need it and do not mind it.
+  @override
+  Future<void> submit(String paneId, String text) async {
+    await sendText(paneId, text);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    await sendKeys(paneId, const ['enter']);
+  }
+
+  @override
   Future<void> sendKeys(String paneId, List<String> keys) =>
       call('pane.send_input', {'pane_id': paneId, 'keys': keys});
 
-  /// A new workspace with one pane, started in [cwd]. Returns the pane id.
-  Future<String?> createWorkspace(String cwd, {String? label}) async {
+  /// A new workspace with one pane in [cwd]. Herdr has no call that runs a
+  /// command, so the command is typed into the new pane's shell, as its own
+  /// CLI does.
+  @override
+  Future<String?> startAgent(String cwd, String command,
+      {String? label}) async {
     final res = await call('workspace.create', {
       'cwd': cwd,
       'label': ?label,
       'focus': false,
     });
-    return ((res['root_pane'] as Map?)?['pane_id']) as String?;
+    final paneId = ((res['root_pane'] as Map?)?['pane_id']) as String?;
+    if (paneId != null) await submit(paneId, command);
+    return paneId;
   }
 
   /// The agent Herdr sees running in the pane; null once it has exited back
   /// to the shell.
+  @override
   Future<String?> paneAgent(String paneId) async {
     final res = await call('pane.get', {'pane_id': paneId});
     return (res['pane'] as Map?)?['agent'] as String?;
@@ -203,11 +231,13 @@ class HerdrClient {
 
   /// Closes the pane, and the agent running in it. Herdr closes the
   /// workspace too when this was its last pane.
+  @override
   Future<void> closePane(String paneId) =>
       call('pane.close', {'pane_id': paneId});
 
   /// `ReadSource` values use underscores over the socket; the CLI's
   /// `recent-unwrapped` spelling is rejected here.
+  @override
   Future<String> readPane(
     String paneId, {
     String source = 'recent_unwrapped',
@@ -230,6 +260,7 @@ class HerdrClient {
   /// Only global subscriptions are requested: the three per-pane kinds
   /// (`pane.agent_status_changed`, `pane.output_matched`,
   /// `pane.scroll_changed`) require a `pane_id` and would fail the call.
+  @override
   Future<HerdrEventStream> subscribe() async {
     final channel = await _ssh.forwardLocalUnix(socketPath);
     final stream = HerdrEventStream(channel);
@@ -256,9 +287,13 @@ class HerdrClient {
         })}\n'));
     return stream;
   }
+
+  /// Every call has its own channel; there is nothing held open to close.
+  @override
+  Future<void> close() async {}
 }
 
-class HerdrEventStream {
+class HerdrEventStream implements HostEvents {
   final SSHForwardChannel _channel;
   final _controller = StreamController<Map<String, dynamic>>.broadcast();
   late final StreamSubscription _sub;
@@ -287,8 +322,10 @@ class HerdrEventStream {
     );
   }
 
+  @override
   Stream<Map<String, dynamic>> get events => _controller.stream;
 
+  @override
   Future<void> close() async {
     await _sub.cancel();
     try {

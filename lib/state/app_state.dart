@@ -7,6 +7,7 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 
 import '../herdr/client.dart';
+import '../herdr/host_client.dart';
 import '../herdr/models.dart';
 import 'machines.dart';
 import 'push.dart';
@@ -164,8 +165,8 @@ class AppState extends ChangeNotifier {
   bool sending = false;
 
   SSHClient? _ssh;
-  HerdrClient? _rpc;
-  HerdrEventStream? _eventConn;
+  HostClient? _rpc;
+  HostEvents? _eventConn;
   SSHSession? _tailSession;
   bool _tailAlive = false;
   bool _rebinding = false;
@@ -838,9 +839,7 @@ print('@@@' + json.dumps(list(plans.values())))''';
     if (rpc == null) return;
     touchActivity();
     try {
-      await rpc.sendText(pane.paneId, command);
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      await rpc.sendKeys(pane.paneId, const ['enter']);
+      await rpc.submit(pane.paneId, command);
     } catch (e) {
       error = '$command failed: $e';
       notifyListeners();
@@ -1092,8 +1091,8 @@ print('@@@' + json.dumps(list(plans.values())))''';
       _ssh = ssh;
 
       final path = await _resolveSocketPath(ssh);
-      _rpc = HerdrClient(ssh, path);
-      await _rpc!.call('ping');
+      _rpc = await HostClient.open(ssh, path);
+      await _rpc!.ping();
 
       _eventConn = await _rpc!.subscribe();
       _eventConn!.events.listen(_onEvent, onError: (_) {});
@@ -2017,6 +2016,50 @@ for base, _, names in os.walk(root):
 for pane, (_, path) in best.items():
     sys.stdout.write('%s %s\n' % (pane, path))''';
 
+  /// Pi and omp file sessions under a folder per working directory; the
+  /// file's `session` record, in its first lines, names the directory. Under
+  /// herdr-core nothing reports which one a pane has open, so the newest
+  /// started in the pane's directory is taken. Arguments as for Codex.
+  static const _piPython = r'''import json, os, sys
+wanted = {}
+for i in range(1, len(sys.argv) - 1, 2):
+    wanted[os.path.realpath(sys.argv[i + 1])] = sys.argv[i]
+best = {}
+for root in ('~/.pi/agent/sessions', '~/.omp/agent/sessions'):
+    root = os.path.expanduser(root)
+    try:
+        folders = os.listdir(root)
+    except OSError:
+        continue
+    for folder in folders:
+        base = os.path.join(root, folder)
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith('.jsonl'):
+                continue
+            path = os.path.join(base, name)
+            cwd = None
+            try:
+                with open(path) as handle:
+                    for _ in range(3):
+                        record = json.loads(handle.readline() or 'null')
+                        if isinstance(record, dict) and record.get('type') == 'session':
+                            cwd = record.get('cwd')
+                            break
+            except Exception:
+                continue
+            pane = wanted.get(os.path.realpath(cwd)) if cwd else None
+            if not pane:
+                continue
+            stamp = os.path.getmtime(path)
+            if pane not in best or stamp > best[pane][0]:
+                best[pane] = (stamp, path)
+for pane, (_, path) in best.items():
+    sys.stdout.write('%s %s\n' % (pane, path))''';
+
   static const _followPython = r'''import json, os, sys, time
 # Follows a transcript from a byte position, as `tail -c +FROM -F` would, but
 # sends a line too big for a phone link trimmed: pictures reduced to their
@@ -2333,6 +2376,9 @@ main()''';
 
   @visibleForTesting
   static String get windowScriptForTest => '$_thumbnailPython\n$_windowPython';
+
+  @visibleForTesting
+  static String get piFinderScriptForTest => _piPython;
 
   /// Read a window of the transcript with the image payloads taken out.
   ///
@@ -3100,6 +3146,8 @@ if found:
       return switch (pane.agent) {
         'codex' => _findByFolder(pane, _codexPython, 'a Codex rollout'),
         'muse' => _findByFolder(pane, _musePython, 'a muse session'),
+        'pi' || 'omp' =>
+          _findByFolder(pane, _piPython, 'a ${pane.agent} session'),
         _ => null,
       };
     }
@@ -3694,12 +3742,7 @@ if found:
     _publish();
     notifyListeners();
     try {
-      await rpc.sendText(pane.paneId, text);
-      // A beat before the return key: Codex and muse ignore an Enter that
-      // arrives while they are still taking in the pasted text. The others do
-      // not need it and do not mind it.
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      await rpc.sendKeys(pane.paneId, const ['enter']);
+      await rpc.submit(pane.paneId, text);
     } catch (e) {
       error = 'send failed: $e';
       _pending.removeWhere((p) => p.text == text.trim());
@@ -3766,10 +3809,12 @@ if found:
       );
       await ssh.authenticated;
       final path = await _resolveSocketPath(ssh);
-      final probe = HerdrClient(ssh, path);
-      final pong = await probe.call('ping');
-      final version = pong['version'] ?? '?';
-      return 'OK · HERDR $version';
+      final probe = await HostClient.open(ssh, path);
+      try {
+        return 'OK · ${await probe.ping()}';
+      } finally {
+        await probe.close();
+      }
     } on SSHAuthFailError {
       return 'FAILED · AUTH REJECTED';
     } catch (e) {
@@ -3938,9 +3983,7 @@ if found:
         notifyListeners();
         return false;
       }
-      await rpc.sendText(pane.paneId, command);
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      await rpc.sendKeys(pane.paneId, const ['enter']);
+      await rpc.submit(pane.paneId, command);
       await refreshNow();
       return true;
     } catch (e) {
@@ -4454,11 +4497,7 @@ print('@@@' + json.dumps(unique))''';
     touchActivity();
     Future<void> pause(int ms) =>
         Future<void>.delayed(Duration(milliseconds: ms));
-    Future<void> type(String text) async {
-      await rpc.sendText(pane.paneId, text);
-      await pause(250);
-      await rpc.sendKeys(pane.paneId, const ['enter']);
-    }
+    Future<void> type(String text) => rpc.submit(pane.paneId, text);
 
     Future<String> screen() =>
         rpc.readPane(pane.paneId, source: 'visible', lines: 40);
@@ -4556,7 +4595,7 @@ print('@@@' + json.dumps(unique))''';
           // Codex then asks for a reasoning level: Enter would save it as the
           // default for new sessions, `s` keeps it to this one.
           if (effort == null) {
-            await rpc.sendText(pane.paneId, 's');
+            await rpc.sendKeys(pane.paneId, const ['s']);
             return true;
           }
           const levels = [..._codexEffortLabels, _codexMore];
@@ -4800,9 +4839,7 @@ for name in names:
     ];
   }
 
-  /// Start [harness] in a new Herdr workspace in [cwd]. Herdr has no call
-  /// that runs a command, so the command is typed into the new pane's shell,
-  /// as its own CLI does.
+  /// Start [harness] in a new workspace in [cwd].
   Future<bool> startAgent(String cwd, String harness, {String? model}) async {
     final rpc = _rpc;
     final command = startCommand(harness, model: model);
@@ -4810,11 +4847,8 @@ for name in names:
     touchActivity();
     try {
       final label = cwd.split('/').where((s) => s.isNotEmpty).lastOrNull;
-      final paneId = await rpc.createWorkspace(cwd, label: label);
+      final paneId = await rpc.startAgent(cwd, command, label: label);
       if (paneId == null) return false;
-      await rpc.sendText(paneId, command);
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-      await rpc.sendKeys(paneId, const ['enter']);
       await refreshNow();
       return true;
     } catch (e) {
@@ -5019,6 +5053,7 @@ for name in names:
     _tailSession?.close();
     _tailSession = null;
     await _eventConn?.close();
+    await _rpc?.close();
     _rpc = null;
     _eventConn = null;
     _ssh?.close();
