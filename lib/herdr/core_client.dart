@@ -19,6 +19,10 @@ class CoreClient implements HostClient {
   final StreamSink<List<int>> _in;
   final void Function() _hangUp;
 
+  /// Another channel to the same core. A connection that subscribes to
+  /// events carries only events from then on, so they get one of their own.
+  final Future<CoreClient?> Function()? _another;
+
   /// The login home on the host, where Claude Code keeps its sessions.
   late final String home;
 
@@ -31,7 +35,7 @@ class CoreClient implements HostClient {
   int _nextId = 1;
   bool _closed = false;
 
-  CoreClient._(this._out, this._in, this._hangUp) {
+  CoreClient._(this._out, this._in, this._hangUp, this._another) {
     _sub = _out.listen(_read, onDone: _end, onError: (_) => _end());
   }
 
@@ -54,15 +58,17 @@ class CoreClient implements HostClient {
     } catch (_) {
       return null;
     }
-    return over(session.stdout, session.stdin, session.close);
+    return over(session.stdout, session.stdin, session.close,
+        another: () => connect(ssh));
   }
 
   /// The core at the other end of [out] and [into], a channel already
   /// running [launch]; null when no core answers there.
   @visibleForTesting
   static Future<CoreClient?> over(Stream<List<int>> out,
-      StreamSink<List<int>> into, void Function() hangUp) async {
-    final client = CoreClient._(out, into, hangUp);
+      StreamSink<List<int>> into, void Function() hangUp,
+      {Future<CoreClient?> Function()? another}) async {
+    final client = CoreClient._(out, into, hangUp, another);
     try {
       await client._home.future.timeout(const Duration(seconds: 10));
       await client._call('hello', {'generation': 1});
@@ -308,8 +314,17 @@ class CoreClient implements HostClient {
 
   @override
   Future<HostEvents> subscribe() async {
-    await _call('events.subscribe');
-    return _CoreEvents(_events.stream);
+    final channel = await _another?.call();
+    if (channel == null) {
+      throw const HerdrError('events', 'no second channel to the core');
+    }
+    try {
+      await channel._call('events.subscribe');
+    } catch (_) {
+      await channel.close();
+      rethrow;
+    }
+    return _CoreEvents(channel);
   }
 
   /// The app's own command line, run by the core on the host. A host
@@ -419,12 +434,13 @@ class CoreClient implements HostClient {
 }
 
 class _CoreEvents implements HostEvents {
-  @override
-  final Stream<Map<String, dynamic>> events;
+  final CoreClient _channel;
 
-  _CoreEvents(this.events);
+  _CoreEvents(this._channel);
 
-  /// The events share the core's channel, which closes with the client.
   @override
-  Future<void> close() async {}
+  Stream<Map<String, dynamic>> get events => _channel._events.stream;
+
+  @override
+  Future<void> close() => _channel.close();
 }
