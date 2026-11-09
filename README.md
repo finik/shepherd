@@ -18,6 +18,10 @@ built from its own transcript — not scraped off a screen. A composer at the
 bottom, the way every message app on the phone works. When an agent asks a
 question, you get the question and its choices as buttons.
 
+Both Herdrs work: the Herdr desktop app, which runs its terminals in
+herdr-core, and Herdr TUI. Shepherd uses herdr-core when the host has `hc`,
+and Herdr TUI's socket otherwise; nothing to choose in the app.
+
 Nothing is reproduced from the terminal. The terminal stays where it is good.
 
 <p align="center">
@@ -197,7 +201,7 @@ the app already holds.
 </p>
 
 **Ordinary phone things.** Light and dark. Renaming a session. The git branch
-and dirty count for each agent's folder. More than one Herdr session on a host:
+and dirty count for each agent's folder. More than one Herdr TUI session on a host:
 each machine can name the one it follows (`herdr --session work`), so one phone
 can watch separate sets of agents.
 
@@ -215,13 +219,14 @@ can watch separate sets of agents.
 ```
 
 One SSH connection does everything. Where the host has herdr-core, which the
-Herdr app runs its terminals in, one channel runs `hc connect` and speaks its
+Herdr app runs its terminals in, a channel runs `hc connect` and speaks its
 JSON-RPC: `terminal.list` and the app's layout document for the spaces, tabs
-and terminals, `events.subscribe` for every change, `terminal.send` and
-`terminal.keys` to type. Each agent reports its own state to the core, so
+and terminals, `terminal.send` and `terminal.keys` to type. A second
+`hc connect` channel carries `events.subscribe`, every change as it happens. Each agent reports its own state to the core, so
 whether it is working, finished or waiting on you is its word, not a guess
 from the screen. Claude Code's session comes from the file it keeps for its
-process under `~/.claude/sessions/`.
+process under `~/.claude/sessions/`; other agents' transcripts are found by
+the pane's folder.
 
 With Herdr TUI, Herdr's Unix socket is forwarded over the connection
 (`direct-streamlocal@openssh.com`) and spoken to in newline-delimited JSON:
