@@ -93,6 +93,7 @@ class MachineStore {
   static const _themeKey = 'themeMode';
   static const _thinkingKey = 'showThinking';
   static const _toolsKey = 'showTools';
+  static const _thinkingInlineKey = 'showThinkingInline';
   static const _notifyKey = 'notifyAgents';
   static const _notifyModeKey = 'notifyMode';
   static const _quietKey = 'quietMinutes';
@@ -100,6 +101,12 @@ class MachineStore {
 
   Future<bool> showThinking() async =>
       (await SharedPreferences.getInstance()).getBool(_thinkingKey) ?? true;
+
+  /// Off by default: a thinking block can be long, and the thread reads as a
+  /// conversation without them.
+  Future<bool> showThinkingInline() async =>
+      (await SharedPreferences.getInstance()).getBool(_thinkingInlineKey) ??
+      false;
 
   Future<bool> showTools() async =>
       (await SharedPreferences.getInstance()).getBool(_toolsKey) ?? true;
@@ -138,6 +145,9 @@ class MachineStore {
 
   Future<void> setShowThinking(bool v) async =>
       (await SharedPreferences.getInstance()).setBool(_thinkingKey, v);
+
+  Future<void> setShowThinkingInline(bool v) async =>
+      (await SharedPreferences.getInstance()).setBool(_thinkingInlineKey, v);
 
   Future<void> setShowTools(bool v) async =>
       (await SharedPreferences.getInstance()).setBool(_toolsKey, v);
