@@ -370,6 +370,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 setSheetState(() {});
                 setState(() {});
               }),
+              if (state.showThinking)
+                _menuToggle(d, 'Show thinking in the thread',
+                    state.showThinkingInline, (v) {
+                  state.setShowThinkingInline(v);
+                  setSheetState(() {});
+                  setState(() {});
+                }),
               _menuToggle(d, 'Show tool calls', state.showTools, (v) {
                 state.setShowTools(v);
                 setSheetState(() {});
@@ -1022,6 +1029,23 @@ class _ChatScreenState extends State<ChatScreen> {
         case Reasoning():
           if (!widget.state.showThinking) break;
           flushProse();
+          if (widget.state.showThinkingInline) {
+            flushLedger();
+            if (step.text.trim().isNotEmpty) {
+              out.add(Padding(
+                padding: EdgeInsets.symmetric(horizontal: pad),
+                child: MarkdownBody(
+                  data: step.text,
+                  styleSheet: _markdownStyle(d).copyWith(
+                    p: d.prose.copyWith(
+                        color: d.ink3, fontStyle: FontStyle.italic),
+                  ),
+                  onTapLink: (_, href, _) => _openLink(href),
+                ),
+              ));
+            }
+            break;
+          }
           reasoning++;
         case ToolCall():
           if (!widget.state.showTools) break;

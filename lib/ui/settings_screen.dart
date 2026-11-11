@@ -156,6 +156,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   _toggle(
                     d,
+                    'Show thinking in the thread',
+                    'Print each reasoning step as it is written, in a muted '
+                        'style, instead of folding it into the steps line. '
+                        'Needs Show chain of thought.',
+                    state.showThinking && state.showThinkingInline,
+                    state.showThinking ? state.setShowThinkingInline : (_) {},
+                  ),
+                  _toggle(
+                    d,
                     'Show tool calls',
                     'What the agent ran, listed under each turn.',
                     state.showTools,
