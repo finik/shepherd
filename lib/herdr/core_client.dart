@@ -170,14 +170,53 @@ class CoreClient implements HostClient {
   static int? _foregroundPid(Map<String, dynamic> t) =>
       ((t['foreground'] as Map?)?['pid'] as num?)?.toInt();
 
+  /// The transcript of each session already found. Once found, it does not
+  /// move.
+  final _transcripts = <String, String>{};
+
+  /// Prints the directory Claude Code was started with, from its own
+  /// environment (`CLAUDE_CONFIG_DIR`, else `~/.claude`), then its record of
+  /// the process. A user may keep it anywhere, so nothing here guesses a name.
+  static const _claudeDirScript = r'''
+pid="$1"
+[ -r "/proc/$pid/environ" ] && d=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | sed -n 's/^CLAUDE_CONFIG_DIR=//p' | head -n 1)
+[ -n "$d" ] || d=$(ps eww -p "$pid" -o command= 2>/dev/null | tr ' ' '\n' | sed -n 's/^CLAUDE_CONFIG_DIR=//p' | head -n 1)
+[ -n "$d" ] || d="$HOME/.claude"
+d="${d%/}"
+printf '%s\n' "$d"
+cat "$d/sessions/$pid.json"
+''';
+
+  Future<String> _run(List<String> argv) async {
+    final res = await _call('machine.exec', {'argv': argv, 'timeout': 10});
+    if (res['code'] != 0) return '';
+    return utf8.decode(base64.decode(res['stdout'] as String? ?? ''),
+        allowMalformed: true);
+  }
+
   /// What Claude Code says about the process: the session it has open, and
-  /// the name you gave it. It rewrites the file when either changes.
+  /// the name you gave it. It rewrites the file when either changes. The
+  /// result carries `_transcript`, the session's file, when it is found.
   Future<Map<String, dynamic>?> _claudeSession(int pid) async {
     try {
-      final res = await _call(
-          'file.read', {'path': '$home/.claude/sessions/$pid.json'});
-      final value = jsonDecode(res['text'] as String? ?? '');
-      return value is Map<String, dynamic> ? value : null;
+      final out = await _run(['sh', '-c', _claudeDirScript, 'sh', '$pid']);
+      final nl = out.indexOf('\n');
+      if (nl <= 0) return null;
+      final dir = out.substring(0, nl);
+      final value = jsonDecode(out.substring(nl + 1));
+      if (value is! Map<String, dynamic>) return null;
+      final id = value['sessionId'];
+      if (id is String && RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(id)) {
+        var path = _transcripts[id];
+        if (path == null) {
+          path = (await _run([
+            'find', '$dir/projects', '-maxdepth', '2', '-name', '$id.jsonl'
+          ])).split('\n').first.trim();
+          if (path.isNotEmpty) _transcripts[id] = path;
+        }
+        if (path.isNotEmpty) value['_transcript'] = path;
+      }
+      return value;
     } catch (_) {
       return null;
     }
@@ -241,10 +280,15 @@ class CoreClient implements HostClient {
         title: t['title'] as String?,
         label: named.isEmpty ? null : named,
         agentSession: session?['sessionId'] is String
-            ? AgentSession(
-                agent: 'claude',
-                kind: 'id',
-                value: session!['sessionId'] as String)
+            ? (session?['_transcript'] is String
+                ? AgentSession(
+                    agent: 'claude',
+                    kind: 'path',
+                    value: session!['_transcript'] as String)
+                : AgentSession(
+                    agent: 'claude',
+                    kind: 'id',
+                    value: session!['sessionId'] as String))
             : null,
         stateSeq: (t['status_ms'] as num?)?.toInt() ?? 0,
       ));
