@@ -153,6 +153,11 @@ class AppState extends ChangeNotifier {
   String? transcriptDiagnostic;
   bool showThinking = true;
   bool showTools = true;
+
+  /// Print each thinking block in the thread, in a muted style, instead of
+  /// counting it in the line that opens the turn's detail. Needs
+  /// [showThinking].
+  bool showThinkingInline = false;
   /// How you are told an agent stopped: 'off', 'push' (Herdr's plugin sends
   /// to this device) or 'poll' (the app watches from a foreground service).
   /// One or the other — running both means every event arrives twice.
@@ -4919,6 +4924,7 @@ for name in names:
     });
     showThinking = await _prefs.showThinking();
     showTools = await _prefs.showTools();
+    showThinkingInline = await _prefs.showThinkingInline();
     notifyMode = await _prefs.notifyMode();
     quietMinutes = await _prefs.quietMinutes();
     notifyListeners();
@@ -5033,6 +5039,12 @@ for name in names:
     showThinking = value;
     notifyListeners();
     await _prefs.setShowThinking(value);
+  }
+
+  Future<void> setShowThinkingInline(bool value) async {
+    showThinkingInline = value;
+    notifyListeners();
+    await _prefs.setShowThinkingInline(value);
   }
 
   Future<void> setShowTools(bool value) async {
