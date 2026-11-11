@@ -799,25 +799,70 @@ print('@@@' + json.dumps(list(plans.values())))''';
       window ??
       (agent == 'claude' ? (usage.used > 200000 ? 1000000 : 200000) : null);
 
-  Future<({int? window, bool assumed})> _resolveWindow(
-      String agent, ContextUsage usage) async {
-    int? find(List<ModelOption> models, String id) {
-      for (final m in models) {
-        if (m.context == null) continue;
-        if (m.id == id || m.id.endsWith('/$id') || m.label == id) {
-          return m.context;
-        }
+  /// The window of the model [id] in [models]. The transcript names a model
+  /// without the `[1m]` Claude's own listing adds to its 1M variant.
+  @visibleForTesting
+  static int? windowOf(List<ModelOption> models, String id) {
+    for (final m in models) {
+      if (m.context == null) continue;
+      if (m.id == id ||
+          m.id.replaceAll('[1m]', '') == id ||
+          m.id.endsWith('/$id') ||
+          m.label == id) {
+        return m.context;
       }
+    }
+    return null;
+  }
+
+  /// Anthropic's window for a model, from the public table the cost script
+  /// keeps on the host. Claude lists no windows, and its transcripts do not
+  /// say which one a session has.
+  static const _tableWindowPython = r'''import json, os, sys
+try:
+    with open(os.path.expanduser('~/.shepherd/prices.json')) as handle:
+        row = json.load(handle).get(sys.argv[1])
+except Exception:
+    row = None
+if (isinstance(row, dict) and row.get('litellm_provider') == 'anthropic'
+        and row.get('max_input_tokens')):
+    print('@@@%d' % row['max_input_tokens'])''';
+
+  @visibleForTesting
+  static String get tableWindowScript => _tableWindowPython;
+
+  Future<int?> _tableWindow(String model) async {
+    final ssh = _ssh;
+    if (ssh == null || !RegExp(r'^[A-Za-z0-9._-]+$').hasMatch(model)) {
       return null;
     }
+    try {
+      final out = await HerdrClient.run(
+        ssh,
+        'python3 - ${_shellQuote(model)} <<\'SHEPHERD_WINDOW_TABLE\'\n'
+        '$_tableWindowPython\n'
+        'SHEPHERD_WINDOW_TABLE',
+      );
+      final line = utf8
+          .decode(out, allowMalformed: true)
+          .split('\n')
+          .lastWhere((l) => l.startsWith('@@@'), orElse: () => '');
+      return line.isEmpty ? null : int.tryParse(line.substring(3));
+    } catch (_) {
+      return null;
+    }
+  }
 
-    final own = find(await listModels(agent), usage.model);
+  Future<({int? window, bool assumed})> _resolveWindow(
+      String agent, ContextUsage usage) async {
+    final own = windowOf(await listModels(agent), usage.model);
     if (own != null) return (window: own, assumed: false);
-    // Claude lists no windows of its own; Pi and omp keep a catalog of
-    // Anthropic's models that does.
     if (agent == 'claude') {
+      final listed = await _tableWindow(usage.model);
+      if (listed != null) return (window: listed, assumed: false);
+      // Pi and omp keep a catalog of Anthropic's models that has windows.
       for (final other in const ['pi', 'omp']) {
-        final w = find(await listModels(other), 'anthropic/${usage.model}');
+        final w = windowOf(await listModels(other), 'anthropic/${usage.model}');
         if (w != null) return (window: w, assumed: false);
       }
       return (window: null, assumed: true);
