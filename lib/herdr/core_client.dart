@@ -243,6 +243,18 @@ cat "$d/sessions/$pid.json"
       }
     }
 
+    // A space or tab name belongs to a terminal only when it holds no other:
+    // two sessions in one space are not both called by the space's name.
+    final inSpace = <String, int>{};
+    final inTab = <String, int>{};
+    for (final t in terminals) {
+      if (t['state'] != 'live') continue;
+      final labels = (t['labels'] as Map?) ?? const {};
+      final space = labels['herdr.space'], tab = labels['herdr.tab'];
+      if (space is String) inSpace[space] = (inSpace[space] ?? 0) + 1;
+      if (tab is String) inTab[tab] = (inTab[tab] ?? 0) + 1;
+    }
+
     final panes = <Pane>[];
     final workspaces = <String, Workspace>{};
     final tabs = <String, TabInfo>{};
@@ -265,8 +277,8 @@ cat "$d/sessions/$pid.json"
       final session = pid == null ? null : sessions[pid];
       final agent = agentOf(t);
       final named = [
-        tabNames[tabId] ?? '',
-        spaceNames[spaceId] ?? '',
+        if ((inTab[tabId] ?? 1) == 1) tabNames[tabId] ?? '',
+        if ((inSpace[spaceId] ?? 1) == 1) spaceNames[spaceId] ?? '',
         if (session?['nameSource'] == 'user') (session?['name'] as String?) ?? '',
       ].firstWhere((n) => n.trim().isNotEmpty, orElse: () => '');
 
@@ -393,14 +405,26 @@ cat "$d/sessions/$pid.json"
     } catch (_) {}
   }
 
-  /// The name is the space's: the app's spaces are what you name, and a
-  /// session moved over from Herdr took its pane's name to its space.
+  /// Names the space when the terminal is alone in it, else its tab, so
+  /// another session in the same space keeps its name.
   @override
   Future<void> renamePane(String paneId, String? label) async {
     final t = await _call('terminal.get', {'terminal': paneId});
-    final space = ((t['labels'] as Map?)?['herdr.space']) as String?;
+    final labels = (t['labels'] as Map?) ?? const {};
+    final space = labels['herdr.space'] as String?;
+    final tab = labels['herdr.tab'] as String?;
     if (space == null) return;
-    await _app(['do', 'space.rename', '--id', space, '--name', label ?? '']);
+    final list = await _call('terminal.list');
+    final others = (list['terminals'] as List? ?? const []).whereType<Map>().where(
+        (o) =>
+            o['address'] != paneId &&
+            o['state'] == 'live' &&
+            (o['labels'] as Map?)?['herdr.space'] == space);
+    if (others.isEmpty || tab == null) {
+      await _app(['do', 'space.rename', '--id', space, '--name', label ?? '']);
+    } else {
+      await _app(['do', 'tab.rename', '--id', tab, '--name', label ?? '']);
+    }
   }
 
   /// Typed even when the agent is waiting on a question: the answer may be

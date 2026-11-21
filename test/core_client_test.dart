@@ -87,13 +87,24 @@ void main() {
   test('the name you gave is the pane\'s: the tab\'s, else the space\'s', () {
     final host = CoreClient.hostState([
       terminal('t6', space: 'sp2', tab: 'tb2', where: 'Ledger / 1'),
-      terminal('t7', space: 'sp2', tab: 'tb3', where: 'Ledger / prints'),
       terminal('t1', space: 'sp1', tab: 'tb1', where: 'shepherd / 1'),
     ], layout, const {});
     expect(host.paneById('t6')!.label, 'Ledger');
-    expect(host.paneById('t7')!.label, 'prints');
     // A space nobody named is called after its folder; that is not a name.
     expect(host.paneById('t1')!.label, isNull);
+  });
+
+  test('two sessions in one space are not both called by its name', () {
+    final host = CoreClient.hostState([
+      terminal('t6', space: 'sp2', tab: 'tb2', where: 'Ledger / 1', pid: 61),
+      terminal('t7', space: 'sp2', tab: 'tb3', where: 'Ledger / prints'),
+      terminal('t8', space: 'sp2', tab: 'tb4', where: 'Ledger / 3', pid: 81),
+    ], layout, {
+      81: {'pid': 81, 'sessionId': 's81', 'name': 'audit', 'nameSource': 'user'},
+    });
+    expect(host.paneById('t6')!.label, isNull);
+    expect(host.paneById('t7')!.label, 'prints');
+    expect(host.paneById('t8')!.label, 'audit');
   });
 
   test('Claude\'s session and the name you gave it come from its own file',
